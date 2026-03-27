@@ -13,6 +13,7 @@ const SCRIPTS_DIR = path.join(ROOT, "scripts");
 const SETTINGS_PATH = path.join(CONFIG_DIR, "settings.json");
 const STATE_PATH = path.join(CONFIG_DIR, "state.json");
 const USERS_PATH = path.join(CONFIG_DIR, "users.json");
+const ROUTING_AUDIT_PATH = path.join(CONFIG_DIR, "routing-audit.json");
 const ACTIVITY_LOG_PATH = path.join(LOG_DIR, "activity.log");
 const PID_PATH = path.join(ROOT, "phonefarm.pid");
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -23,6 +24,7 @@ const DEFAULT_SETTINGS = {
   adbPath: "adb",
   scrcpyPath: "scrcpy",
   pollIntervalMs: 5000,
+  ipRefreshIntervalMs: 15000,
   prep: {
     minWaitSeconds: 25,
     maxWaitSeconds: 45,
@@ -54,6 +56,8 @@ let state = loadJson(STATE_PATH, DEFAULT_STATE);
 let usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
 let preparingSerial = null;
 let deviceCache = {};
+let lastIpRefreshAt = 0;
+let lastRoutingAuditAt = 0;
 const missingTools = new Set();
 const sessions = new Map();
 
@@ -75,7 +79,9 @@ process.on("SIGTERM", () => {
 
 logActivity("system", "PhoneFarm dashboard starting");
 refreshDevices();
+refreshRoutingAudit();
 setInterval(refreshDevices, settings.pollIntervalMs || 5000);
+setInterval(refreshRoutingAudit, 30000);
 setInterval(trimRecentActivity, 10000);
 setInterval(cleanExpiredSessions, 300000);
 
@@ -320,10 +326,12 @@ function buildStatus(user) {
       host: settings.host,
       port: settings.port,
       pollIntervalMs: settings.pollIntervalMs,
+      ipRefreshIntervalMs: settings.ipRefreshIntervalMs,
       prep: settings.prep
     },
     queue: visibleQueue,
     preparingSerial: visiblePreparing,
+    routingAudit: loadRoutingAudit(),
     devices: visibleDevices,
     recentActivity: filterRecentActivityForUser(user)
   };
@@ -443,6 +451,13 @@ function buildMissingDevice(serial) {
     transportId: "",
     sim: settings.deviceMetadata?.[serial]?.sim || "",
     proxy: settings.deviceMetadata?.[serial]?.proxy || "",
+    network: state.devices?.[serial]?.network || {
+      ipAddress: "",
+      interface: "",
+      source: "",
+      status: "unknown",
+      checkedAt: ""
+    },
     prepState: state.devices?.[serial]?.prepState || "idle",
     prepMessage: state.devices?.[serial]?.prepMessage || "",
     sessionState: state.devices?.[serial]?.sessionState || "stopped"
@@ -460,10 +475,20 @@ function refreshDevices() {
   const previous = deviceCache;
   const rows = queryAdbDevices();
   const next = {};
+  const shouldRefreshNetwork = Date.now() - lastIpRefreshAt >= (settings.ipRefreshIntervalMs || 15000);
 
   for (const row of rows) {
     const stored = state.devices[row.serial] || {};
     const metadata = settings.deviceMetadata[row.serial] || {};
+    const network = shouldRefreshNetwork
+      ? queryDeviceNetwork(row.serial, row.state === "device")
+      : (stored.network || previous[row.serial]?.network || {
+          ipAddress: "",
+          interface: "",
+          source: "",
+          status: row.state === "device" ? "pending" : "offline",
+          checkedAt: ""
+        });
     next[row.serial] = {
       serial: row.serial,
       adbState: row.state,
@@ -474,6 +499,7 @@ function refreshDevices() {
       transportId: row.transportId || "",
       sim: metadata.sim || "",
       proxy: metadata.proxy || "",
+      network,
       prepState: stored.prepState || "idle",
       prepMessage: stored.prepMessage || "",
       sessionState: stored.sessionState || "stopped",
@@ -492,6 +518,13 @@ function refreshDevices() {
     if (!next[serial]) {
       const preserved = buildMissingDevice(serial);
       preserved.prepMessage = "Device not currently visible in ADB";
+      preserved.network = {
+        ipAddress: "",
+        interface: "",
+        source: "",
+        status: "offline",
+        checkedAt: new Date().toISOString()
+      };
       next[serial] = preserved;
       if (previous[serial].online) {
         logActivity("disconnect", "Device disconnected from ADB", serial);
@@ -500,6 +533,9 @@ function refreshDevices() {
   }
 
   deviceCache = next;
+  if (shouldRefreshNetwork) {
+    lastIpRefreshAt = Date.now();
+  }
 }
 
 function queryAdbDevices() {
@@ -556,6 +592,111 @@ function parseAdbLine(line) {
   return info;
 }
 
+function queryDeviceNetwork(serial, online) {
+  const checkedAt = new Date().toISOString();
+  if (!online) {
+    return {
+      ipAddress: "",
+      interface: "",
+      source: "",
+      status: "offline",
+      checkedAt
+    };
+  }
+
+  const attempts = [
+    {
+      source: "ip-route",
+      args: ["-s", serial, "shell", "ip", "route"]
+    },
+    {
+      source: "ip-addr",
+      args: ["-s", serial, "shell", "ip", "-f", "inet", "addr", "show"]
+    },
+    {
+      source: "getprop-wlan0",
+      args: ["-s", serial, "shell", "getprop", "dhcp.wlan0.ipaddress"]
+    },
+    {
+      source: "getprop-rmnet",
+      args: ["-s", serial, "shell", "getprop", "dhcp.rmnet_data0.ipaddress"]
+    }
+  ];
+
+  for (const attempt of attempts) {
+    const result = spawnSync(settings.adbPath || "adb", attempt.args, {
+      cwd: ROOT,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 8000
+    });
+
+    if (result.error || result.status !== 0) {
+      continue;
+    }
+
+    const parsed = parseNetworkOutput(String(result.stdout || ""), attempt.source);
+    if (parsed.ipAddress) {
+      return {
+        ipAddress: parsed.ipAddress,
+        interface: parsed.interface,
+        source: attempt.source,
+        status: "ok",
+        checkedAt
+      };
+    }
+  }
+
+  return {
+    ipAddress: "",
+    interface: "",
+    source: "",
+    status: "unresolved",
+    checkedAt
+  };
+}
+
+function parseNetworkOutput(output, source) {
+  const normalized = String(output || "").trim();
+  if (!normalized) {
+    return { ipAddress: "", interface: "" };
+  }
+
+  if (source === "ip-route") {
+    const lines = normalized.split(/\r?\n/);
+    for (const line of lines) {
+      const match = line.match(/\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3}).*?\bdev\s+([A-Za-z0-9_.:-]+)/);
+      if (match) {
+        return { ipAddress: match[1], interface: match[2] };
+      }
+      const fallback = line.match(/\bdev\s+([A-Za-z0-9_.:-]+).*?\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})/);
+      if (fallback) {
+        return { ipAddress: fallback[2], interface: fallback[1] };
+      }
+    }
+  }
+
+  if (source === "ip-addr") {
+    const match = normalized.match(/inet\s+(\d{1,3}(?:\.\d{1,3}){3})\/\d+\s+.*?\b([A-Za-z0-9_.:-]+)$/m);
+    if (match) {
+      return { ipAddress: match[1], interface: match[2] };
+    }
+    const alt = normalized.match(/\d+:\s+([A-Za-z0-9_.:-]+).*?inet\s+(\d{1,3}(?:\.\d{1,3}){3})\/\d+/s);
+    if (alt) {
+      return { ipAddress: alt[2], interface: alt[1] };
+    }
+  }
+
+  if (source.startsWith("getprop")) {
+    const match = normalized.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
+    if (match) {
+      return { ipAddress: match[1], interface: source.includes("wlan0") ? "wlan0" : "rmnet_data0" };
+    }
+  }
+
+  return { ipAddress: "", interface: "" };
+}
+
 function processPrepQueue() {
   if (preparingSerial || !(state.queue || []).length) return;
   const serial = state.queue[0];
@@ -580,6 +721,21 @@ function processPrepQueue() {
     preparingSerial = null;
     refreshDevices();
     processPrepQueue();
+  });
+}
+
+function refreshRoutingAudit() {
+  if (Date.now() - lastRoutingAuditAt < 25000) return;
+  lastRoutingAuditAt = Date.now();
+  runPowerShellScript("audit-phonefarm-routing.ps1", [], { detached: true });
+}
+
+function loadRoutingAudit() {
+  return loadJson(ROUTING_AUDIT_PATH, {
+    checkedAt: "",
+    overallOk: false,
+    summary: "Routing audit has not completed yet.",
+    checks: []
   });
 }
 

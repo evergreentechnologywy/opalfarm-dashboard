@@ -15,6 +15,9 @@ const deviceCount = document.getElementById("deviceCount");
 const queueList = document.getElementById("queueList");
 const activityList = document.getElementById("activityList");
 const preparingBadge = document.getElementById("preparingBadge");
+const routingStatusBadge = document.getElementById("routingStatusBadge");
+const routingSummary = document.getElementById("routingSummary");
+const routingChecks = document.getElementById("routingChecks");
 const template = document.getElementById("deviceCardTemplate");
 
 loginForm.addEventListener("submit", handleLogin);
@@ -96,6 +99,7 @@ function render() {
   currentUser.textContent = `${state.user.displayName} (${state.user.role})`;
 
   const data = state.data || { devices: [], queue: [], recentActivity: [] };
+  renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] });
   const devices = data.devices || [];
   deviceCount.textContent = `${devices.length} device${devices.length === 1 ? "" : "s"}`;
   preparingBadge.textContent = data.preparingSerial ? `Preparing ${data.preparingSerial}` : "Idle";
@@ -137,6 +141,26 @@ function render() {
   }
 }
 
+function renderRoutingAudit(audit) {
+  routingSummary.textContent = audit.summary || "Routing audit has not completed yet.";
+  routingStatusBadge.textContent = audit.overallOk ? "No Gateway Flags" : "Review Needed";
+  routingStatusBadge.className = `badge ${audit.overallOk ? "badge-ready" : "badge-failed"}`;
+
+  routingChecks.innerHTML = "";
+  const checks = audit.checks || [];
+  if (!checks.length) {
+    routingChecks.innerHTML = `<div class="activity-item">No routing audit results yet.</div>`;
+    return;
+  }
+
+  for (const check of checks) {
+    const el = document.createElement("div");
+    el.className = "activity-item";
+    el.innerHTML = `<strong>${escapeHtml(check.name)}</strong><div>${escapeHtml(check.detail)}</div><small>${check.ok ? "OK" : "Needs review"}</small>`;
+    routingChecks.appendChild(el);
+  }
+}
+
 function renderDevice(device) {
   const fragment = template.content.cloneNode(true);
   const serial = fragment.querySelector(".serial");
@@ -146,6 +170,9 @@ function renderDevice(device) {
   const adbState = fragment.querySelector(".adb-state");
   const sessionState = fragment.querySelector(".session-state");
   const transportId = fragment.querySelector(".transport-id");
+  const ipAddress = fragment.querySelector(".ip-address");
+  const ipMeta = fragment.querySelector(".ip-meta");
+  const networkBadge = fragment.querySelector(".network-badge");
   const simInput = fragment.querySelector(".sim-input");
   const proxyInput = fragment.querySelector(".proxy-input");
 
@@ -158,6 +185,7 @@ function renderDevice(device) {
   adbState.textContent = device.adbState || "unknown";
   sessionState.textContent = device.sessionState || "stopped";
   transportId.textContent = device.transportId || "-";
+  renderNetwork(device.network || {}, ipAddress, ipMeta, networkBadge);
   simInput.value = device.sim || "";
   proxyInput.value = device.proxy || "";
 
@@ -173,6 +201,47 @@ function renderDevice(device) {
   });
 
   return fragment;
+}
+
+function renderNetwork(network, ipAddress, ipMeta, networkBadge) {
+  const status = network.status || "unknown";
+  const ip = network.ipAddress || "";
+  const iface = network.interface || "";
+  const source = network.source || "";
+  const checkedAt = network.checkedAt ? new Date(network.checkedAt).toLocaleTimeString() : "";
+
+  if (status === "ok" && ip) {
+    ipAddress.textContent = ip;
+    ipMeta.textContent = [iface ? `Interface ${iface}` : "", source ? `Source ${source}` : "", checkedAt ? `Checked ${checkedAt}` : ""]
+      .filter(Boolean)
+      .join(" | ");
+    networkBadge.textContent = "IP Ready";
+    networkBadge.className = "badge badge-ready network-badge";
+    return;
+  }
+
+  if (status === "offline") {
+    ipAddress.textContent = "Device offline";
+    ipMeta.textContent = checkedAt ? `Last checked ${checkedAt}` : "No network data";
+    networkBadge.textContent = "Offline";
+    networkBadge.className = "badge badge-offline network-badge";
+    return;
+  }
+
+  if (status === "pending") {
+    ipAddress.textContent = "Waiting for IP refresh";
+    ipMeta.textContent = checkedAt ? `Last checked ${checkedAt}` : "Refresh pending";
+    networkBadge.textContent = "Pending";
+    networkBadge.className = "badge badge-neutral network-badge";
+    return;
+  }
+
+  ipAddress.textContent = "IP not resolved";
+  ipMeta.textContent = [source ? `Source ${source}` : "", checkedAt ? `Checked ${checkedAt}` : "Device online but no IP detected"]
+    .filter(Boolean)
+    .join(" | ");
+  networkBadge.textContent = "Unknown";
+  networkBadge.className = "badge badge-queued network-badge";
 }
 
 async function invokeDeviceAction(serial, action, body = {}) {

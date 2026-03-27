@@ -40,6 +40,15 @@
       </header>
 
       <main class="layout">
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Routing Safety</h2>
+            <span id="routingStatusBadge" class="badge badge-neutral">Checking</span>
+          </div>
+          <p id="routingSummary" class="subtitle compact-subtitle"></p>
+          <div id="routingChecks" class="activity-list"></div>
+        </section>
+
         <section class="panel queue-panel">
           <div class="panel-header">
             <h2>Prep Queue</h2>
@@ -93,6 +102,15 @@
           <div><span>ADB State</span><strong class="adb-state"></strong></div>
           <div><span>Session</span><strong class="session-state"></strong></div>
           <div><span>Transport</span><strong class="transport-id"></strong></div>
+        </div>
+
+        <div class="network-panel">
+          <div class="network-header">
+            <span>Current Phone IP</span>
+            <span class="network-badge"></span>
+          </div>
+          <strong class="ip-address"></strong>
+          <small class="ip-meta"></small>
         </div>
 
         <div class="device-actions">

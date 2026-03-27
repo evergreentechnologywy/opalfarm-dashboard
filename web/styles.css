@@ -109,6 +109,11 @@ h1 {
   font-size: 1rem;
 }
 
+.compact-subtitle {
+  margin-top: 0;
+  margin-bottom: 14px;
+}
+
 .layout {
   display: grid;
   gap: 20px;
@@ -213,6 +218,34 @@ h1 {
 .device-meta span {
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.network-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(235, 244, 239, 0.85), rgba(245, 236, 226, 0.88));
+  border: 1px solid rgba(69, 45, 24, 0.08);
+}
+
+.network-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.ip-address {
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+}
+
+.ip-meta {
+  color: var(--muted);
 }
 
 .button {
