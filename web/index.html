@@ -11,7 +11,7 @@
       <form id="loginForm" class="login-card">
         <p class="eyebrow">PhoneFarm Access</p>
         <h1>Operator Login</h1>
-        <p class="subtitle">Sign in to view only the devices assigned to your account.</p>
+        <p class="subtitle">Sign in to access the local phone operations console.</p>
         <label>
           <span>Username</span>
           <input name="username" type="text" autocomplete="username" required />
@@ -20,57 +20,151 @@
           <span>Password</span>
           <input name="password" type="password" autocomplete="current-password" required />
         </label>
-        <button class="button" type="submit">Sign In</button>
+        <button class="button button-primary" type="submit">Sign In</button>
         <p id="loginError" class="login-error"></p>
       </form>
     </section>
 
     <div id="appShell" class="shell" hidden>
       <header class="hero">
-        <div>
-          <p class="eyebrow">Local Android Device Dashboard</p>
-          <h1>PhoneFarm Control</h1>
-          <p class="subtitle">Visible device status, prep queue control, recent activity, and per-device actions from one local browser tab.</p>
+        <div class="hero-copy">
+          <p class="eyebrow">Internal Operations Console</p>
+          <h1>PhoneFarm</h1>
+          <p class="subtitle">Daily control surface for USB-connected Android phones, prep orchestration, IP verification, and operator access.</p>
         </div>
         <div class="hero-actions">
           <div class="user-pill" id="currentUser"></div>
-          <button id="refreshButton" class="button button-secondary">Refresh</button>
-          <button id="logoutButton" class="button button-ghost">Logout</button>
+          <button id="refreshButton" class="button button-secondary" type="button">Refresh</button>
+          <button id="logoutButton" class="button button-ghost" type="button">Logout</button>
         </div>
       </header>
 
-      <main class="layout">
-        <section class="panel">
-          <div class="panel-header">
-            <h2>Routing Safety</h2>
-            <span id="routingStatusBadge" class="badge badge-neutral">Checking</span>
+      <section class="stats-grid" id="statsGrid"></section>
+
+      <section class="toolbar panel">
+        <div class="toolbar-left">
+          <label class="search-field">
+            <span class="field-label">Search</span>
+            <input id="searchInput" type="search" placeholder="Search nickname or serial" />
+          </label>
+          <label class="select-field">
+            <span class="field-label">Status</span>
+            <select id="statusFilter">
+              <option value="all">All statuses</option>
+              <option value="online">Online</option>
+              <option value="offline">Offline</option>
+              <option value="idle">Idle</option>
+              <option value="queued">Queued</option>
+              <option value="preparing">Preparing</option>
+              <option value="ready">Ready</option>
+              <option value="failed">Failed</option>
+            </select>
+          </label>
+          <label class="select-field">
+            <span class="field-label">Role</span>
+            <select id="roleFilter">
+              <option value="all">All roles</option>
+              <option value="hotspot-provider">Hotspot Provider</option>
+              <option value="hotspot-client">Hotspot Client</option>
+            </select>
+          </label>
+        </div>
+        <div class="toolbar-right">
+          <label class="toggle-chip">
+            <input id="warningsOnlyToggle" type="checkbox" />
+            <span>Warnings Only</span>
+          </label>
+          <label class="toggle-chip">
+            <input id="readyOnlyToggle" type="checkbox" />
+            <span>Ready Only</span>
+          </label>
+          <div class="view-toggle" role="tablist" aria-label="View mode">
+            <button id="cardViewButton" class="view-toggle-button is-active" type="button">Card View</button>
+            <button id="tableViewButton" class="view-toggle-button" type="button">Table View</button>
           </div>
-          <p id="routingSummary" class="subtitle compact-subtitle"></p>
-          <div id="routingChecks" class="activity-list"></div>
+        </div>
+      </section>
+
+      <main class="dashboard-layout">
+        <section class="main-column">
+          <section class="panel devices-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Devices</h2>
+                <p class="panel-copy">Visible devices for this operator, with direct actions and status cues.</p>
+              </div>
+              <span id="deviceCount" class="count-pill">0 devices</span>
+            </div>
+
+            <div id="cardView" class="device-grid"></div>
+
+            <div id="tableView" class="table-shell" hidden>
+              <table class="device-table">
+                <thead>
+                  <tr>
+                    <th>Nickname</th>
+                    <th>Serial</th>
+                    <th>Status</th>
+                    <th>Role</th>
+                    <th>Prep</th>
+                    <th>Public IP</th>
+                    <th>Last Checked</th>
+                    <th>IP Warning</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="deviceTableBody"></tbody>
+              </table>
+            </div>
+          </section>
         </section>
 
-        <section class="panel queue-panel">
-          <div class="panel-header">
-            <h2>Prep Queue</h2>
-            <span id="preparingBadge" class="badge badge-neutral">Idle</span>
-          </div>
-          <div id="queueList" class="queue-list"></div>
-        </section>
+        <aside class="side-column">
+          <section class="panel queue-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Queue</h2>
+                <p class="panel-copy">Global prep flow for all phones.</p>
+              </div>
+              <span id="queueLengthBadge" class="count-pill">0 queued</span>
+            </div>
+            <div class="queue-overview">
+              <div class="queue-overview-card">
+                <span>Active Prep</span>
+                <strong id="activePrepDevice">Idle</strong>
+                <small id="activePrepCountdown">No active countdown</small>
+              </div>
+              <div class="queue-overview-card">
+                <span>Last Completed</span>
+                <strong id="lastCompletedPrep">No completed prep yet</strong>
+                <small id="lastCompletedPrepMeta">Waiting for first completion</small>
+              </div>
+            </div>
+            <div id="queueList" class="queue-list"></div>
+          </section>
 
-        <section class="panel devices-panel">
-          <div class="panel-header">
-            <h2>Devices</h2>
-            <span id="deviceCount" class="count-pill">0 devices</span>
-          </div>
-          <div id="deviceGrid" class="device-grid"></div>
-        </section>
+          <section class="panel activity-panel">
+            <div class="panel-header">
+              <div>
+                <h2>Activity</h2>
+                <p class="panel-copy">Recent actions and warnings affecting operator workflow.</p>
+              </div>
+            </div>
+            <div id="activityList" class="activity-list"></div>
+          </section>
 
-        <section class="panel activity-panel">
-          <div class="panel-header">
-            <h2>Recent Activity</h2>
-          </div>
-          <div id="activityList" class="activity-list"></div>
-        </section>
+          <section class="panel">
+            <div class="panel-header">
+              <div>
+                <h2>Routing Safety</h2>
+                <p class="panel-copy">Checks to confirm remote dashboard access stays separate from phone traffic.</p>
+              </div>
+              <span id="routingStatusBadge" class="badge badge-neutral">Checking</span>
+            </div>
+            <p id="routingSummary" class="panel-copy panel-copy-tight"></p>
+            <div id="routingChecks" class="activity-list"></div>
+          </section>
+        </aside>
       </main>
     </div>
 
@@ -78,69 +172,49 @@
       <article class="device-card">
         <div class="device-card-header">
           <div>
-            <h3 class="serial"></h3>
-            <p class="model"></p>
+            <p class="device-kicker">Device</p>
+            <h3 class="device-name"></h3>
+            <p class="device-serial"></p>
           </div>
-          <div class="badges">
-            <span class="badge badge-status status-badge"></span>
-            <span class="badge badge-prep prep-badge"></span>
+          <div class="card-badges">
+            <span class="badge status-badge"></span>
+            <span class="badge role-badge"></span>
+            <span class="badge prep-badge"></span>
+            <span class="badge duplicate-badge" hidden>Duplicate IP</span>
           </div>
         </div>
 
-        <div class="device-fields">
-          <label>
-            <span>Nickname</span>
-            <input class="nickname-input" type="text" placeholder="Device nickname" />
-          </label>
-          <label>
-            <span>Role</span>
-            <select class="role-select">
-              <option value="hotspot-client">Hotspot Client</option>
-              <option value="hotspot-provider">Hotspot Provider</option>
-            </select>
-          </label>
-          <label>
-            <span>Parent Hotspot Serial</span>
-            <input class="parent-hotspot-input" type="text" placeholder="Optional parent hotspot serial" />
-          </label>
+        <div class="device-meta-grid">
+          <div class="meta-cell">
+            <span>Public IP</span>
+            <strong class="public-ip-value"></strong>
+          </div>
+          <div class="meta-cell">
+            <span>Last Checked</span>
+            <strong class="last-checked-value"></strong>
+          </div>
+          <div class="meta-cell">
+            <span>IP Status</span>
+            <strong class="ip-status-value"></strong>
+          </div>
+          <div class="meta-cell">
+            <span>ADB Serial</span>
+            <strong class="transport-value"></strong>
+          </div>
         </div>
 
-        <div class="device-meta">
-          <div><span>ADB State</span><strong class="adb-state"></strong></div>
-          <div><span>Session</span><strong class="session-state"></strong></div>
-          <div><span>Role</span><strong class="role-value"></strong></div>
-          <div><span>Transport</span><strong class="transport-id"></strong></div>
-        </div>
-
-        <div class="network-panel">
-          <div class="network-header">
-            <span>Current Phone IP</span>
-            <span class="network-badge"></span>
-          </div>
-          <strong class="ip-address"></strong>
-          <small class="ip-meta"></small>
-        </div>
-
-        <div class="network-panel public-ip-panel">
-          <div class="network-header">
-            <span>Public IP Verification</span>
-            <span class="public-ip-badge"></span>
-          </div>
-          <strong class="public-ip-address"></strong>
-          <small class="public-ip-meta"></small>
-          <div class="public-ip-flags">
-            <span class="flag-changed"></span>
-            <span class="flag-duplicate"></span>
-          </div>
+        <div class="device-state-strip">
+          <div class="state-pill state-changed"></div>
+          <div class="state-pill state-duplicate"></div>
+          <div class="state-pill state-prep-message"></div>
         </div>
 
         <div class="device-actions">
-          <button class="button button-secondary action-check-ip">Check IP</button>
-          <button class="button action-open">Open Control</button>
-          <button class="button action-prep">Prep Device</button>
-          <button class="button button-secondary action-start">Start Session</button>
-          <button class="button button-secondary action-stop">Stop Session</button>
-          <button class="button button-ghost action-save">Save Device Info</button>
+          <button class="button button-secondary action-open" type="button">Open Control</button>
+          <button class="button button-primary action-prep" type="button">Prep Device</button>
+          <button class="button button-secondary action-check-ip" type="button">Check IP</button>
+          <button class="button button-secondary action-start" type="button">Start Session</button>
+          <button class="button button-secondary action-stop" type="button">Stop Session</button>
         </div>
       </article>
     </template>

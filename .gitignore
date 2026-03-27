@@ -1,5 +1,7 @@
 logs/
 phonefarm.pid
 config/state.json
+config/device-ip-history.json
+config/routing-audit.json
 .DS_Store
 Thumbs.db
