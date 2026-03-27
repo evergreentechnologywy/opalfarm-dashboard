@@ -29,6 +29,12 @@ Default dashboard URL:
 http://127.0.0.1:7780
 ```
 
+Tailscale remote URL after enabling tailnet access on this machine:
+
+```text
+http://surfacepro.tail50b6ba.ts.net:7780
+```
+
 ## Requirements
 
 Install these tools on Windows:
@@ -48,6 +54,40 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-phonefarm.ps1
 ```
 
 `deploy-phonefarm.ps1` installs Node LTS, Platform Tools, and `scrcpy` with `winget`, resolves the installed binary locations, updates `config\settings.json`, runs a healthcheck, and starts the dashboard.
+
+## Tailscale Remote Access
+
+PhoneFarm can be exposed to your tailnet without exposing it to the public internet or the broader LAN.
+
+Enable Tailscale-only access:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\enable-tailscale-access.ps1
+```
+
+Disable Tailscale-only access and return to localhost-only mode:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\disable-tailscale-access.ps1
+```
+
+When enabled on this machine, use:
+
+```text
+http://surfacepro.tail50b6ba.ts.net:7780
+```
+
+or:
+
+```text
+http://100.123.158.40:7780
+```
+
+Notes:
+
+- This binds PhoneFarm to the machine's current Tailscale IPv4 address, not `0.0.0.0`.
+- The Windows Firewall rule is limited to the CGNAT tailnet range `100.64.0.0/10`.
+- Dashboard login is still required.
 
 ## Dashboard Behavior
 
