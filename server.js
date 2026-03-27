@@ -1,6 +1,7 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 const { URL } = require("url");
 
@@ -11,8 +12,10 @@ const WEB_DIR = path.join(ROOT, "web");
 const SCRIPTS_DIR = path.join(ROOT, "scripts");
 const SETTINGS_PATH = path.join(CONFIG_DIR, "settings.json");
 const STATE_PATH = path.join(CONFIG_DIR, "state.json");
+const USERS_PATH = path.join(CONFIG_DIR, "users.json");
 const ACTIVITY_LOG_PATH = path.join(LOG_DIR, "activity.log");
 const PID_PATH = path.join(ROOT, "phonefarm.pid");
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
 const DEFAULT_SETTINGS = {
   host: "127.0.0.1",
@@ -34,15 +37,30 @@ const DEFAULT_STATE = {
   recentActivity: []
 };
 
+const DEFAULT_USERS = {
+  users: [
+    {
+      username: "admin",
+      displayName: "Admin",
+      role: "admin",
+      allowedDevices: ["*"],
+      passwordHash: "pbkdf2$210000$d5d2d23da02115eb83c4ee3f060ee253$efcd13bca1e29d682e132ab345da8ecd9f38f6b5a9c211fee4e50a3dfa6609f3"
+    }
+  ]
+};
+
 let settings = loadJson(SETTINGS_PATH, DEFAULT_SETTINGS);
 let state = loadJson(STATE_PATH, DEFAULT_STATE);
+let usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
 let preparingSerial = null;
 let deviceCache = {};
 const missingTools = new Set();
+const sessions = new Map();
 
 ensureDirectories();
 writeJsonIfMissing(SETTINGS_PATH, settings);
 writeJsonIfMissing(STATE_PATH, state);
+writeJsonIfMissing(USERS_PATH, usersConfig);
 fs.writeFileSync(PID_PATH, String(process.pid));
 
 process.on("exit", cleanupPid);
@@ -59,23 +77,53 @@ logActivity("system", "PhoneFarm dashboard starting");
 refreshDevices();
 setInterval(refreshDevices, settings.pollIntervalMs || 5000);
 setInterval(trimRecentActivity, 10000);
+setInterval(cleanExpiredSessions, 300000);
 
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const cookies = parseCookies(req.headers.cookie || "");
+    const session = getSession(cookies.phonefarm_session);
+    const user = session ? findUser(session.username) : null;
+
+    if (req.method === "POST" && url.pathname === "/api/login") {
+      const body = await readJsonBody(req);
+      return handleLogin(res, body);
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/logout") {
+      if (cookies.phonefarm_session) {
+        sessions.delete(cookies.phonefarm_session);
+      }
+      return sendJson(res, 200, { ok: true }, [expireSessionCookie()]);
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/me") {
+      if (!user) {
+        return sendJson(res, 401, { error: "Authentication required" });
+      }
+      return sendJson(res, 200, { ok: true, user: sanitizeUser(user) });
+    }
+
+    if (url.pathname.startsWith("/api/")) {
+      if (!user) {
+        return sendJson(res, 401, { error: "Authentication required" });
+      }
+    }
 
     if (req.method === "GET" && url.pathname === "/api/status") {
-      return sendJson(res, 200, buildStatus());
+      return sendJson(res, 200, buildStatus(user));
     }
 
     if (req.method === "GET" && url.pathname === "/api/logs/recent") {
-      return sendJson(res, 200, { recentActivity: state.recentActivity || [] });
+      return sendJson(res, 200, { recentActivity: filterRecentActivityForUser(user) });
     }
 
     if (req.method === "POST" && url.pathname === "/api/config/reload") {
       settings = loadJson(SETTINGS_PATH, DEFAULT_SETTINGS);
-      logActivity("system", "Configuration reloaded");
-      return sendJson(res, 200, { ok: true, settings });
+      usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
+      logActivity("system", `Configuration reloaded by ${user.username}`);
+      return sendJson(res, 200, { ok: true, settings, user: sanitizeUser(user) });
     }
 
     const match = url.pathname.match(/^\/api\/devices\/([^/]+)\/([^/]+)$/);
@@ -83,7 +131,7 @@ const server = http.createServer(async (req, res) => {
       const serial = decodeURIComponent(match[1]);
       const action = match[2];
       const body = await readJsonBody(req);
-      return handleDeviceAction(res, serial, action, body);
+      return handleDeviceAction(res, user, serial, action, body);
     }
 
     return serveStatic(url.pathname, res);
@@ -119,7 +167,6 @@ function loadJson(filePath, fallback) {
   if (!fs.existsSync(filePath)) {
     return JSON.parse(JSON.stringify(fallback));
   }
-
   try {
     return JSON.parse(fs.readFileSync(filePath, "utf8"));
   } catch (error) {
@@ -155,48 +202,152 @@ function logActivity(category, message, serial = null) {
     serial,
     message
   };
-
   const line = `[${entry.timestamp}] [${category}]${serial ? ` [${serial}]` : ""} ${message}\n`;
   fs.appendFileSync(ACTIVITY_LOG_PATH, line);
   state.recentActivity = [entry, ...(state.recentActivity || [])].slice(0, 200);
   saveState();
 }
 
-function buildStatus() {
+function parseCookies(cookieHeader) {
+  const cookies = {};
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const index = trimmed.indexOf("=");
+    if (index < 0) continue;
+    const key = trimmed.slice(0, index);
+    const value = trimmed.slice(index + 1);
+    cookies[key] = decodeURIComponent(value);
+  }
+  return cookies;
+}
+
+function getSession(token) {
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session) return null;
+  if (Date.now() > session.expiresAt) {
+    sessions.delete(token);
+    return null;
+  }
+  session.expiresAt = Date.now() + SESSION_TTL_MS;
+  return session;
+}
+
+function cleanExpiredSessions() {
+  for (const [token, session] of sessions.entries()) {
+    if (Date.now() > session.expiresAt) {
+      sessions.delete(token);
+    }
+  }
+}
+
+function findUser(username) {
+  return (usersConfig.users || []).find(item => item.username === username) || null;
+}
+
+function sanitizeUser(user) {
+  return {
+    username: user.username,
+    displayName: user.displayName || user.username,
+    role: user.role || "operator",
+    allowedDevices: user.allowedDevices || []
+  };
+}
+
+function verifyPassword(password, storedHash) {
+  const parts = String(storedHash || "").split("$");
+  if (parts.length !== 4 || parts[0] !== "pbkdf2") return false;
+  const iterations = Number(parts[1]);
+  const salt = parts[2];
+  const expected = parts[3];
+  const actual = crypto.pbkdf2Sync(password, salt, iterations, 32, "sha256").toString("hex");
+  return crypto.timingSafeEqual(Buffer.from(actual, "hex"), Buffer.from(expected, "hex"));
+}
+
+function createSessionCookie(token) {
+  return `phonefarm_session=${encodeURIComponent(token)}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${SESSION_TTL_MS / 1000}`;
+}
+
+function expireSessionCookie() {
+  return "phonefarm_session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0";
+}
+
+function handleLogin(res, body) {
+  const username = String(body.username || "").trim();
+  const password = String(body.password || "");
+  const user = findUser(username);
+  if (!user || !verifyPassword(password, user.passwordHash)) {
+    logActivity("auth", `Failed login attempt for ${username || "unknown"}`);
+    return sendJson(res, 401, { error: "Invalid username or password" });
+  }
+
+  const token = crypto.randomBytes(32).toString("hex");
+  sessions.set(token, {
+    username: user.username,
+    expiresAt: Date.now() + SESSION_TTL_MS
+  });
+  logActivity("auth", `Successful login for ${user.username}`);
+  return sendJson(res, 200, { ok: true, user: sanitizeUser(user) }, [createSessionCookie(token)]);
+}
+
+function userCanAccessDevice(user, serial) {
+  if (!user) return false;
+  const allowed = user.allowedDevices || [];
+  return allowed.includes("*") || allowed.includes(serial);
+}
+
+function filterDevicesForUser(user) {
+  return Object.values(deviceCache)
+    .filter(device => userCanAccessDevice(user, device.serial))
+    .sort((a, b) => a.serial.localeCompare(b.serial));
+}
+
+function filterRecentActivityForUser(user) {
+  if (!user) return [];
+  return (state.recentActivity || []).filter(entry => !entry.serial || userCanAccessDevice(user, entry.serial));
+}
+
+function buildStatus(user) {
+  const visibleDevices = filterDevicesForUser(user);
+  const visibleSerials = new Set(visibleDevices.map(device => device.serial));
+  const visibleQueue = (state.queue || []).filter(serial => visibleSerials.has(serial));
+  const visiblePreparing = preparingSerial && visibleSerials.has(preparingSerial) ? preparingSerial : null;
   return {
     ok: true,
+    user: sanitizeUser(user),
     settings: {
       host: settings.host,
       port: settings.port,
       pollIntervalMs: settings.pollIntervalMs,
       prep: settings.prep
     },
-    queue: state.queue || [],
-    preparingSerial,
-    devices: Object.values(deviceCache).sort((a, b) => a.serial.localeCompare(b.serial)),
-    recentActivity: state.recentActivity || []
+    queue: visibleQueue,
+    preparingSerial: visiblePreparing,
+    devices: visibleDevices,
+    recentActivity: filterRecentActivityForUser(user)
   };
 }
 
-function sendJson(res, statusCode, data) {
-  res.writeHead(statusCode, { "Content-Type": "application/json; charset=utf-8" });
+function sendJson(res, statusCode, data, extraCookies = []) {
+  const headers = { "Content-Type": "application/json; charset=utf-8" };
+  if (extraCookies.length) {
+    headers["Set-Cookie"] = extraCookies;
+  }
+  res.writeHead(statusCode, headers);
   res.end(JSON.stringify(data));
 }
 
 function serveStatic(urlPath, res) {
   const requested = urlPath === "/" ? "/index.html" : urlPath;
   const filePath = path.normalize(path.join(WEB_DIR, requested));
-
   if (!filePath.startsWith(WEB_DIR)) {
     return sendJson(res, 403, { error: "Forbidden" });
   }
-
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     return sendJson(res, 404, { error: "Not found" });
   }
-
-  const contentType = getContentType(filePath);
-  res.writeHead(200, { "Content-Type": contentType });
+  res.writeHead(200, { "Content-Type": getContentType(filePath) });
   fs.createReadStream(filePath).pipe(res);
 }
 
@@ -229,9 +380,12 @@ function readJsonBody(req) {
   });
 }
 
-function handleDeviceAction(res, serial, action, body) {
-  const knownDevice = deviceCache[serial] || buildMissingDevice(serial);
+function handleDeviceAction(res, user, serial, action, body) {
+  if (!userCanAccessDevice(user, serial)) {
+    return sendJson(res, 403, { error: "You do not have access to this device" });
+  }
 
+  const knownDevice = deviceCache[serial] || buildMissingDevice(serial);
   if (action === "metadata") {
     settings.deviceMetadata[serial] = {
       ...(settings.deviceMetadata[serial] || {}),
@@ -240,25 +394,25 @@ function handleDeviceAction(res, serial, action, body) {
     };
     saveSettings();
     refreshDevices();
-    logActivity("metadata", "SIM/proxy metadata updated", serial);
+    logActivity("metadata", `SIM/proxy metadata updated by ${user.username}`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
   if (action === "open-control") {
     runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: true });
-    logActivity("scrcpy", "Open Control requested", serial);
+    logActivity("scrcpy", `Open Control requested by ${user.username}`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
   if (action === "start-session") {
     updateDeviceState(serial, { sessionState: "running", sessionStartedAt: new Date().toISOString() });
-    logActivity("session", "Session started", serial);
+    logActivity("session", `Session started by ${user.username}`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
   if (action === "stop-session") {
     updateDeviceState(serial, { sessionState: "stopped", sessionStoppedAt: new Date().toISOString() });
-    logActivity("session", "Session stopped", serial);
+    logActivity("session", `Session stopped by ${user.username}`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -271,7 +425,7 @@ function handleDeviceAction(res, serial, action, body) {
     }
     state.queue = [...(state.queue || []), serial];
     updateDeviceState(serial, { prepState: "queued", prepMessage: "Queued for prep" });
-    logActivity("queue", "Device added to prep queue", serial);
+    logActivity("queue", `Device added to prep queue by ${user.username}`, serial);
     processPrepQueue();
     return sendJson(res, 200, { ok: true });
   }
@@ -355,17 +509,14 @@ function queryAdbDevices() {
     encoding: "utf8",
     windowsHide: true
   });
-
   if (result.error) {
     logMissingToolOnce("adb", result.error.message);
     return [];
   }
-
   const output = String(result.stdout || "").trim();
   if (!output) {
     return [];
   }
-
   return output
     .split(/\r?\n/)
     .slice(1)
@@ -385,10 +536,7 @@ function logMissingToolOnce(tool, message) {
 
 function parseAdbLine(line) {
   const parts = line.split(/\s+/);
-  if (parts.length < 2) {
-    return null;
-  }
-
+  if (parts.length < 2) return null;
   const info = {
     serial: parts[0],
     state: parts[1],
@@ -397,7 +545,6 @@ function parseAdbLine(line) {
     deviceName: "",
     transportId: ""
   };
-
   for (const token of parts.slice(2)) {
     const [key, value] = token.split(":");
     if (!value) continue;
@@ -406,15 +553,11 @@ function parseAdbLine(line) {
     if (key === "device") info.deviceName = value;
     if (key === "transport_id") info.transportId = value;
   }
-
   return info;
 }
 
 function processPrepQueue() {
-  if (preparingSerial || !(state.queue || []).length) {
-    return;
-  }
-
+  if (preparingSerial || !(state.queue || []).length) return;
   const serial = state.queue[0];
   preparingSerial = serial;
   state.queue = state.queue.slice(1);
@@ -423,14 +566,7 @@ function processPrepQueue() {
 
   const child = runPowerShellScript(
     "prep-device-session.ps1",
-    [
-      "-Serial",
-      serial,
-      "-SettingsPath",
-      SETTINGS_PATH,
-      "-ActivityLogPath",
-      ACTIVITY_LOG_PATH
-    ],
+    ["-Serial", serial, "-SettingsPath", SETTINGS_PATH, "-ActivityLogPath", ACTIVITY_LOG_PATH],
     { detached: false }
   );
 
@@ -456,10 +592,8 @@ function runPowerShellScript(scriptName, scriptArgs, options) {
     detached: Boolean(options?.detached),
     stdio: "ignore"
   });
-
   if (options?.detached) {
     child.unref();
   }
-
   return child;
 }

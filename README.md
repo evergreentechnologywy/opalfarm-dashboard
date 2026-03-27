@@ -6,6 +6,7 @@ PhoneFarm is a local-first Windows dashboard for Android device management on a 
 
 - `C:\PhoneFarm\config\settings.json`: local settings, paths, and per-device SIM/proxy metadata.
 - `C:\PhoneFarm\config\state.json`: persisted queue and device state cache.
+- `C:\PhoneFarm\config\users.json`: local user accounts, password hashes, and per-device access scope.
 - `C:\PhoneFarm\logs\activity.log`: shared activity log.
 - `C:\PhoneFarm\logs\prep-<serial>.log`: prep log per device.
 - `C:\PhoneFarm\scripts\`: PowerShell helper scripts.
@@ -15,6 +16,7 @@ PhoneFarm is a local-first Windows dashboard for Android device management on a 
 
 ```powershell
 cd C:\PhoneFarm
+.\deploy-phonefarm.ps1
 .\start-phonefarm.ps1
 .\scripts\healthcheck-phonefarm.ps1
 .\stop-phonefarm.ps1
@@ -37,6 +39,16 @@ Install these tools on Windows:
 
 Update `C:\PhoneFarm\config\settings.json` if `adb` or `scrcpy` are not in `PATH`.
 
+For a fresh machine, the preferred bootstrap is:
+
+```powershell
+git clone https://github.com/evergreentechnologywy/phonefarm-dashboard.git C:\PhoneFarm
+cd C:\PhoneFarm
+powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-phonefarm.ps1
+```
+
+`deploy-phonefarm.ps1` installs Node LTS, Platform Tools, and `scrcpy` with `winget`, resolves the installed binary locations, updates `config\settings.json`, runs a healthcheck, and starts the dashboard.
+
 ## Dashboard Behavior
 
 - Device cards show serial, model, ADB state, prep state, SIM, proxy, and session state.
@@ -44,6 +56,33 @@ Update `C:\PhoneFarm\config\settings.json` if `adb` or `scrcpy` are not in `PATH
 - `Prep Device` always enqueues the device and never runs concurrently with another prep job.
 - Prep states are `idle`, `queued`, `preparing`, `ready`, and `failed`.
 - `Start Session` and `Stop Session` are explicit operator state markers stored locally.
+
+## Authentication And Access Control
+
+- The dashboard now requires login before any API access.
+- Default admin user: `admin`
+- Default admin password: `Daniel1099#`
+- Passwords are stored as PBKDF2 hashes in `C:\PhoneFarm\config\users.json`.
+- Device visibility and actions are enforced per user by serial.
+
+Create or update a restricted operator:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\manage-phonefarm-user.ps1 `
+  -Username operator1 `
+  -Password 'StrongPasswordHere!' `
+  -DisplayName 'Operator 1' `
+  -AllowedDevices SERIAL1,SERIAL2
+```
+
+Create or update another admin:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\manage-phonefarm-user.ps1 `
+  -Username supervisor `
+  -Password 'StrongPasswordHere!' `
+  -Role admin
+```
 
 ## Prep Workflow
 

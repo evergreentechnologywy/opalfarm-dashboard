@@ -27,13 +27,18 @@ if ($nodePidValue) {
 
 $dashboardStatus = "offline"
 try {
-  $response = Invoke-WebRequest -Uri $dashboardUrl -UseBasicParsing -TimeoutSec 5
-  if ($response.StatusCode -eq 200) {
+  $response = Invoke-WebRequest -Uri "http://$($settings.host):$($settings.port)/api/me" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+  if ($response.StatusCode -eq 200 -or $response.StatusCode -eq 401) {
     $dashboardStatus = "online"
   }
 }
 catch {
-  $dashboardStatus = "offline"
+  $webException = $_.Exception
+  if ($webException.Response -and $webException.Response.StatusCode.value__ -eq 401) {
+    $dashboardStatus = "online"
+  } else {
+    $dashboardStatus = "offline"
+  }
 }
 
 $adbCommand = Get-Command $settings.adbPath -ErrorAction SilentlyContinue

@@ -7,7 +7,25 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div class="shell">
+    <section id="loginShell" class="login-shell">
+      <form id="loginForm" class="login-card">
+        <p class="eyebrow">PhoneFarm Access</p>
+        <h1>Operator Login</h1>
+        <p class="subtitle">Sign in to view only the devices assigned to your account.</p>
+        <label>
+          <span>Username</span>
+          <input name="username" type="text" autocomplete="username" required />
+        </label>
+        <label>
+          <span>Password</span>
+          <input name="password" type="password" autocomplete="current-password" required />
+        </label>
+        <button class="button" type="submit">Sign In</button>
+        <p id="loginError" class="login-error"></p>
+      </form>
+    </section>
+
+    <div id="appShell" class="shell" hidden>
       <header class="hero">
         <div>
           <p class="eyebrow">Local Android Device Dashboard</p>
@@ -15,7 +33,9 @@
           <p class="subtitle">Visible device status, prep queue control, recent activity, and per-device actions from one local browser tab.</p>
         </div>
         <div class="hero-actions">
+          <div class="user-pill" id="currentUser"></div>
           <button id="refreshButton" class="button button-secondary">Refresh</button>
+          <button id="logoutButton" class="button button-ghost">Logout</button>
         </div>
       </header>
 
