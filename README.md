@@ -1,14 +1,15 @@
 # PhoneFarm Dashboard
 
-PhoneFarm is a local-first Windows dashboard for Android device management on a USB-connected control machine. It binds to `127.0.0.1` by default, keeps prep execution single-file through a queue, and launches `scrcpy` per-device for direct operator control.
+PhoneFarm is a local-first Windows 11 dashboard for Android device management on a USB-connected control machine. It binds to `127.0.0.1` by default, uses a single global prep queue, launches `scrcpy` per serial, and verifies each phone's own public IP from the phone side instead of substituting the PC's IP.
 
 ## Folder Layout
 
-- `C:\PhoneFarm\config\settings.json`: local settings, paths, and per-device SIM/proxy metadata.
+- `C:\PhoneFarm\config\settings.json`: local bind address, ports, ADB path, scrcpy path, and polling settings.
+- `C:\PhoneFarm\config\devices.json`: serial, nickname, role, and optional parent hotspot reference.
 - `C:\PhoneFarm\config\state.json`: persisted queue and device state cache.
 - `C:\PhoneFarm\config\users.json`: local user accounts, password hashes, and per-device access scope.
 - `C:\PhoneFarm\config\device-ip-history.json`: public IP history per device serial.
-- `C:\PhoneFarm\logs\activity.log`: shared activity log.
+- `C:\PhoneFarm\logs\activity.log`: shared dashboard activity log.
 - `C:\PhoneFarm\logs\ip-check.log`: public IP verification log.
 - `C:\PhoneFarm\logs\prep-<serial>.log`: prep log per device.
 - `C:\PhoneFarm\scripts\`: PowerShell helper scripts.
@@ -25,29 +26,21 @@ cd C:\PhoneFarm
 .\scripts\restart-adb.ps1
 ```
 
-Default dashboard URL:
+Local dashboard URL:
 
 ```text
 http://127.0.0.1:7780
 ```
 
-Tailscale remote URL after enabling tailnet access on this machine:
-
-```text
-http://surfacepro.tail50b6ba.ts.net:7780
-```
-
-## Requirements
-
-Install these tools on Windows:
+## Required Tools
 
 - Node.js
 - Android SDK Platform Tools (`adb.exe`)
 - `scrcpy`
 
-Update `C:\PhoneFarm\config\settings.json` if `adb` or `scrcpy` are not in `PATH`.
+If `adb.exe` or `scrcpy.exe` are not on `PATH`, PhoneFarm uses the explicit paths in `C:\PhoneFarm\config\settings.json`.
 
-For a fresh machine, the preferred bootstrap is:
+Fresh machine bootstrap:
 
 ```powershell
 git clone https://github.com/evergreentechnologywy/phonefarm-dashboard.git C:\PhoneFarm
@@ -55,89 +48,66 @@ cd C:\PhoneFarm
 powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-phonefarm.ps1
 ```
 
-`deploy-phonefarm.ps1` installs Node LTS, Platform Tools, and `scrcpy` with `winget`, resolves the installed binary locations, updates `config\settings.json`, runs a healthcheck, and starts the dashboard.
+`deploy-phonefarm.ps1` installs Node LTS, Platform Tools, and `scrcpy` with `winget`, resolves the installed binary locations, updates `settings.json`, runs a healthcheck, and starts the dashboard.
 
-## Tailscale Remote Access
+## Device Metadata Model
 
-PhoneFarm can be exposed to your tailnet without exposing it to the public internet or the broader LAN.
+`C:\PhoneFarm\config\devices.json` stores the local per-device metadata used by the dashboard:
 
-Enable Tailscale-only access:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\enable-tailscale-access.ps1
+```json
+{
+  "devices": [
+    {
+      "serial": "DEVICE_SERIAL",
+      "nickname": "Desk Phone 1",
+      "role": "hotspot-provider",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "DEVICE_SERIAL_2",
+      "nickname": "Client Phone 1",
+      "role": "hotspot-client",
+      "parentHotspotSerial": "DEVICE_SERIAL"
+    }
+  ]
+}
 ```
 
-Disable Tailscale-only access and return to localhost-only mode:
+Supported roles:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\disable-tailscale-access.ps1
-```
+- `hotspot-provider`
+- `hotspot-client`
 
-When enabled on this machine, use:
+## Dashboard Features
 
-```text
-http://surfacepro.tail50b6ba.ts.net:7780
-```
+Each device card shows:
 
-or:
-
-```text
-http://100.123.158.40:7780
-```
-
-Notes:
-
-- This binds PhoneFarm to the machine's current Tailscale IPv4 address, not `0.0.0.0`.
-- The Windows Firewall rule is limited to the CGNAT tailnet range `100.64.0.0/10`.
-- Dashboard login is still required.
-
-## Dashboard Behavior
-
-- Device cards show serial, model, ADB state, prep state, SIM, proxy, and session state.
-- Device cards show the phone's current local IP and a separate public-IP verification widget.
-- `Open Control` launches `scrcpy` for the selected serial only.
-- `Check IP` runs a device-side public IP verification for the selected serial only.
-- `Prep Device` always enqueues the device and never runs concurrently with another prep job.
-- Prep states are `idle`, `queued`, `preparing`, `ready`, and `failed`.
-- `Start Session` and `Stop Session` are explicit operator state markers stored locally.
-
-## Public IP Verification
-
-PhoneFarm can verify each phone's own public IP without using the PC's IP as a substitute.
-
-What it shows per device:
-
-- Current public IP
-- Last checked timestamp
+- serial
+- nickname
+- online or offline status
+- role
+- prep state
+- current public IP
+- last checked time
 - IP status: `unknown`, `verified`, `changed`, `duplicate`, `failed`
-- Changed since last prep/session: yes or no
-- Duplicate with another active phone: yes or no
 
-Behavior:
+Each device card provides:
 
-- `Check IP` runs a public IP verification for the selected serial only.
-- A public IP check runs automatically after prep completes successfully.
-- `Start Session` performs a fresh IP verification before marking the session running.
-- Results are written to `C:\PhoneFarm\logs\ip-check.log`.
-- History is written to `C:\PhoneFarm\config\device-ip-history.json`.
+- `Open Control`
+- `Prep Device`
+- `Check IP`
+- `Start Session`
+- `Stop Session`
 
-Implementation path:
+The dashboard also shows:
 
-- The check is device-side, not PC-side.
-- PhoneFarm runs device shell commands through `adb -s <serial> shell ...`.
-- It tries on-device HTTP clients such as `curl`, `toybox wget`, and `wget` against public IP endpoints.
-- The request originates from the phone's own network path when those commands are available on the device.
+- a global prep queue panel
+- recent activity
+- routing safety audit status
 
-Tradeoffs and limitations:
+## Authentication
 
-- This is intentionally not a PC-side lookup.
-- Some Android builds do not ship usable shell HTTP clients. On those devices, the public IP check will show `failed`.
-- If that happens, the next practical path is to install a small helper app on the phone that can fetch and return the public IP under ADB control.
-- Duplicate detection is based on the latest successful public IP checks across currently visible devices.
-
-## Authentication And Access Control
-
-- The dashboard now requires login before any API access.
+- The dashboard requires login before any API access.
 - Default admin user: `admin`
 - Default admin password: `Daniel1099#`
 - Passwords are stored as PBKDF2 hashes in `C:\PhoneFarm\config\users.json`.
@@ -153,62 +123,128 @@ powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\manage-
   -AllowedDevices SERIAL1,SERIAL2
 ```
 
-Create or update another admin:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\manage-phonefarm-user.ps1 `
-  -Username supervisor `
-  -Password 'StrongPasswordHere!' `
-  -Role admin
-```
-
 ## Prep Workflow
 
 When `Prep Device` is pressed, the backend:
 
-1. Adds the device to the queue.
-2. Waits until it becomes the single active prep job.
-3. Runs `prep-device-session.ps1` with the selected device serial.
-4. Attempts to enable airplane mode.
+1. Adds the selected serial to the global prep queue.
+2. Waits until it becomes the one active prep job.
+3. Runs `prep-device-session.ps1` for that serial.
+4. Enables airplane mode.
 5. Waits a random `25-45` seconds.
-6. Attempts to disable airplane mode.
-7. Attempts to re-enable hotspot.
-8. Waits for the device to return online.
-9. Marks the device `ready` on success or `failed` on error.
+6. Disables airplane mode.
+7. If the device role is `hotspot-provider`, attempts to re-enable hotspot.
+8. If the device role is `hotspot-client`, waits for network recovery without trying to start hotspot.
+9. Runs an automatic public IP verification from the phone's own network path.
+10. Marks the device `ready` or `failed`.
 
-## Android Command Limitations
+Prep states:
 
-Airplane mode and hotspot control vary by Android version, OEM ROM, and whether the build allows shell-level connectivity commands.
+- `idle`
+- `queued`
+- `preparing`
+- `ready`
+- `failed`
 
-- Airplane mode: the prep script tries both `cmd connectivity airplane-mode` and the global settings/broadcast path.
-- Hotspot: the prep script tries `cmd connectivity tether start wifi` variants.
-- If the device blocks these commands, prep fails intentionally instead of silently skipping the reset step.
+## Public IP Verification
 
-This is by design. The operator sees `failed`, and the logs explain which command path was blocked.
+PhoneFarm verifies each phone's own public IP without using the PC's IP as a substitute.
 
-## DeviceFarmer / STF Fallback
+Behavior:
 
-DeviceFarmer is the maintained STF-compatible path, but on this host it is a secondary option because:
+- `Check IP` runs a public IP verification for the selected serial only.
+- A public IP check runs automatically after prep completes successfully.
+- `Start Session` performs a fresh IP verification before marking the session running.
+- Results are written to `C:\PhoneFarm\logs\ip-check.log`.
+- History is written to `C:\PhoneFarm\config\device-ip-history.json`.
+- Duplicate IPs across currently visible devices are flagged in the UI.
+- The dashboard shows whether the IP changed since the device's last successful prep verification.
+
+Implementation path:
+
+- The check is device-side, not PC-side.
+- `check-device-ip.ps1` calls `adb -s <serial> shell ...` for the selected phone only.
+- It tries on-device HTTP clients such as `curl`, `toybox wget`, and `wget` against public IP endpoints.
+- The HTTP request originates from the phone's own network path when those shell tools are available on the device.
+
+Tradeoffs:
+
+- This is intentionally not a PC-side IP lookup.
+- Some Android builds do not ship usable shell HTTP clients. On those devices, the public IP check shows `failed`.
+- If that happens, the next practical path is a small helper app on-device that can fetch and return the public IP under ADB control.
+
+## Scripts
+
+- `C:\PhoneFarm\start-phonefarm.ps1`
+- `C:\PhoneFarm\stop-phonefarm.ps1`
+- `C:\PhoneFarm\scripts\restart-adb.ps1`
+- `C:\PhoneFarm\scripts\open-scrcpy-for-device.ps1`
+- `C:\PhoneFarm\scripts\prep-device-session.ps1`
+- `C:\PhoneFarm\scripts\check-device-ip.ps1`
+- `C:\PhoneFarm\scripts\healthcheck-phonefarm.ps1`
+- `C:\PhoneFarm\scripts\manage-phonefarm-user.ps1`
+- `C:\PhoneFarm\scripts\audit-phonefarm-routing.ps1`
+
+## DeviceFarmer / STF Note
+
+DeviceFarmer is the maintained STF-compatible path, but on this host it remains a documented fallback instead of the primary runtime because:
 
 - Docker Desktop is not installed.
 - WSL2 is not installed.
-- Native Windows STF deployments are fragile compared with a local Windows `adb` + `scrcpy` stack.
+- Native Windows STF deployments are fragile compared with a direct Windows `adb` + `scrcpy` stack.
 
-Minimum fallback path if STF is still required:
+Minimum fallback path:
 
 1. Install WSL2 or Docker Desktop.
 2. Run DeviceFarmer containers behind localhost-only bindings.
-3. Keep this PhoneFarm dashboard as the operator-facing layer for prep queueing and SIM/proxy metadata.
-4. Use DeviceFarmer primarily for browser-based inventory/viewing if the Docker path proves stable on this hardware.
-
-## Reboot / Recovery
-
-- PhoneFarm is idempotent. Restarting the dashboard reuses persisted state from `config\state.json`.
-- If ADB becomes unstable after USB churn, run `C:\PhoneFarm\scripts\restart-adb.ps1`.
-- Logs remain in `C:\PhoneFarm\logs`.
+3. Keep PhoneFarm as the operator-facing local queue, metadata, and prep/IP layer.
 
 ## Local Security
 
-- The dashboard binds to `127.0.0.1` by default.
-- No public port exposure is configured.
+- PhoneFarm is configured to bind to `127.0.0.1`.
+- No public services are exposed by default.
 - Only local scripts under `C:\PhoneFarm` are used for device actions.
+
+## Deployment Summary
+
+Commands run during this build:
+
+- `winget search adb; winget search scrcpy`
+- `winget install --id Google.PlatformTools --exact --accept-package-agreements --accept-source-agreements; winget install --id Genymobile.scrcpy --exact --accept-package-agreements --accept-source-agreements`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\start-phonefarm.ps1`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\stop-phonefarm.ps1`
+- `powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\healthcheck-phonefarm.ps1`
+- local git init/commit/push operations for the PhoneFarm repository
+
+Files created or updated for the final local-only build:
+
+- `C:\PhoneFarm\package.json`
+- `C:\PhoneFarm\server.js`
+- `C:\PhoneFarm\README.md`
+- `C:\PhoneFarm\start-phonefarm.ps1`
+- `C:\PhoneFarm\stop-phonefarm.ps1`
+- `C:\PhoneFarm\deploy-phonefarm.ps1`
+- `C:\PhoneFarm\config\settings.json`
+- `C:\PhoneFarm\config\devices.json`
+- `C:\PhoneFarm\config\state.json`
+- `C:\PhoneFarm\config\users.json`
+- `C:\PhoneFarm\config\device-ip-history.json`
+- `C:\PhoneFarm\scripts\healthcheck-phonefarm.ps1`
+- `C:\PhoneFarm\scripts\open-scrcpy-for-device.ps1`
+- `C:\PhoneFarm\scripts\prep-device-session.ps1`
+- `C:\PhoneFarm\scripts\check-device-ip.ps1`
+- `C:\PhoneFarm\scripts\restart-adb.ps1`
+- `C:\PhoneFarm\web\index.html`
+- `C:\PhoneFarm\web\app.js`
+- `C:\PhoneFarm\web\styles.css`
+
+Services or scheduled tasks created:
+
+- None. PhoneFarm currently runs as a manually started local process.
+
+Known limitations:
+
+- Phones must appear in `adb devices -l` before the dashboard can manage them.
+- Airplane mode and hotspot control vary by Android version and OEM ROM.
+- Device-side public IP verification depends on shell HTTP tooling available on the phone.
+- DeviceFarmer/STF is documented as a fallback path, not the active Windows runtime on this host.

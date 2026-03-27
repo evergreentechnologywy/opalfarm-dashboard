@@ -14,6 +14,7 @@ const SETTINGS_PATH = path.join(CONFIG_DIR, "settings.json");
 const STATE_PATH = path.join(CONFIG_DIR, "state.json");
 const USERS_PATH = path.join(CONFIG_DIR, "users.json");
 const ROUTING_AUDIT_PATH = path.join(CONFIG_DIR, "routing-audit.json");
+const DEVICES_CONFIG_PATH = path.join(CONFIG_DIR, "devices.json");
 const DEVICE_IP_HISTORY_PATH = path.join(CONFIG_DIR, "device-ip-history.json");
 const ACTIVITY_LOG_PATH = path.join(LOG_DIR, "activity.log");
 const IP_CHECK_LOG_PATH = path.join(LOG_DIR, "ip-check.log");
@@ -31,8 +32,7 @@ const DEFAULT_SETTINGS = {
     minWaitSeconds: 25,
     maxWaitSeconds: 45,
     onlineTimeoutSeconds: 90
-  },
-  deviceMetadata: {}
+  }
 };
 
 const DEFAULT_STATE = {
@@ -43,6 +43,10 @@ const DEFAULT_STATE = {
 
 const DEFAULT_IP_HISTORY = {
   devices: {}
+};
+
+const DEFAULT_DEVICES_CONFIG = {
+  devices: []
 };
 
 const DEFAULT_USERS = {
@@ -60,6 +64,7 @@ const DEFAULT_USERS = {
 let settings = loadJson(SETTINGS_PATH, DEFAULT_SETTINGS);
 let state = loadJson(STATE_PATH, DEFAULT_STATE);
 let usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
+let devicesConfig = loadJson(DEVICES_CONFIG_PATH, DEFAULT_DEVICES_CONFIG);
 let preparingSerial = null;
 let deviceCache = {};
 let lastIpRefreshAt = 0;
@@ -73,6 +78,7 @@ ensureDirectories();
 writeJsonIfMissing(SETTINGS_PATH, settings);
 writeJsonIfMissing(STATE_PATH, state);
 writeJsonIfMissing(USERS_PATH, usersConfig);
+writeJsonIfMissing(DEVICES_CONFIG_PATH, devicesConfig);
 writeJsonIfMissing(DEVICE_IP_HISTORY_PATH, deviceIpHistory);
 fs.writeFileSync(PID_PATH, String(process.pid));
 
@@ -137,6 +143,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "POST" && url.pathname === "/api/config/reload") {
       settings = loadJson(SETTINGS_PATH, DEFAULT_SETTINGS);
       usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
+      devicesConfig = loadJson(DEVICES_CONFIG_PATH, DEFAULT_DEVICES_CONFIG);
       logActivity("system", `Configuration reloaded by ${user.username}`);
       return sendJson(res, 200, { ok: true, settings, user: sanitizeUser(user) });
     }
@@ -201,6 +208,10 @@ function saveState() {
 
 function saveSettings() {
   fs.writeFileSync(SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`);
+}
+
+function saveDevicesConfig() {
+  fs.writeFileSync(DEVICES_CONFIG_PATH, `${JSON.stringify(devicesConfig, null, 2)}\n`);
 }
 
 function saveDeviceIpHistory() {
@@ -333,6 +344,33 @@ function filterRecentActivityForUser(user) {
   return (state.recentActivity || []).filter(entry => !entry.serial || userCanAccessDevice(user, entry.serial));
 }
 
+function getDeviceConfig(serial) {
+  return (devicesConfig.devices || []).find(device => device.serial === serial) || {
+    serial,
+    nickname: "",
+    role: "hotspot-client",
+    parentHotspotSerial: ""
+  };
+}
+
+function upsertDeviceConfig(serial, patch) {
+  const devices = devicesConfig.devices || [];
+  const index = devices.findIndex(device => device.serial === serial);
+  const nextRecord = {
+    ...getDeviceConfig(serial),
+    ...patch,
+    serial
+  };
+  if (index >= 0) {
+    devices[index] = nextRecord;
+  } else {
+    devices.push(nextRecord);
+  }
+  devicesConfig.devices = devices;
+  saveDevicesConfig();
+  return nextRecord;
+}
+
 function buildStatus(user) {
   const visibleDevices = applyDuplicateFlags(filterDevicesForUser(user));
   const visibleSerials = new Set(visibleDevices.map(device => device.serial));
@@ -418,14 +456,13 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
 
   const knownDevice = deviceCache[serial] || buildMissingDevice(serial);
   if (action === "metadata") {
-    settings.deviceMetadata[serial] = {
-      ...(settings.deviceMetadata[serial] || {}),
-      sim: String(body.sim || "").trim(),
-      proxy: String(body.proxy || "").trim()
-    };
-    saveSettings();
+    upsertDeviceConfig(serial, {
+      nickname: String(body.nickname || "").trim(),
+      role: String(body.role || "hotspot-client").trim() || "hotspot-client",
+      parentHotspotSerial: String(body.parentHotspotSerial || "").trim()
+    });
     refreshDevices();
-    logActivity("metadata", `SIM/proxy metadata updated by ${user.username}`, serial);
+    logActivity("metadata", `Device metadata updated by ${user.username}`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
@@ -490,6 +527,7 @@ function buildMissingDevice(serial) {
     lastError: "",
     lastReason: ""
   };
+  const deviceConfig = getDeviceConfig(serial);
   return {
     serial,
     adbState: "unknown",
@@ -497,8 +535,9 @@ function buildMissingDevice(serial) {
     model: "",
     product: "",
     transportId: "",
-    sim: settings.deviceMetadata?.[serial]?.sim || "",
-    proxy: settings.deviceMetadata?.[serial]?.proxy || "",
+    nickname: deviceConfig.nickname || "",
+    role: deviceConfig.role || "hotspot-client",
+    parentHotspotSerial: deviceConfig.parentHotspotSerial || "",
     network: state.devices?.[serial]?.network || {
       ipAddress: "",
       interface: "",
@@ -528,7 +567,7 @@ function refreshDevices() {
 
   for (const row of rows) {
     const stored = state.devices[row.serial] || {};
-    const metadata = settings.deviceMetadata[row.serial] || {};
+    const metadata = getDeviceConfig(row.serial);
     const network = shouldRefreshNetwork
       ? queryDeviceNetwork(row.serial, row.state === "device")
       : (stored.network || previous[row.serial]?.network || {
@@ -546,8 +585,9 @@ function refreshDevices() {
       product: row.product || "",
       deviceName: row.deviceName || "",
       transportId: row.transportId || "",
-      sim: metadata.sim || "",
-      proxy: metadata.proxy || "",
+      nickname: metadata.nickname || "",
+      role: metadata.role || "hotspot-client",
+      parentHotspotSerial: metadata.parentHotspotSerial || "",
       network,
       publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
       prepState: stored.prepState || "idle",
@@ -792,50 +832,38 @@ function performDevicePublicIpCheck(serial, reason) {
   const startedAt = new Date().toISOString();
   const deviceState = state.devices?.[serial] || {};
   const history = ensureDeviceIpHistory(serial);
-  const attempts = [
-    {
-      source: "device-curl-ipify",
-      args: ["-s", serial, "shell", "curl", "-fsSL", "https://api64.ipify.org?format=text"]
-    },
-    {
-      source: "device-toybox-wget-ipify",
-      args: ["-s", serial, "shell", "toybox", "wget", "-qO-", "https://api64.ipify.org?format=text"]
-    },
-    {
-      source: "device-wget-ifconfigme",
-      args: ["-s", serial, "shell", "wget", "-qO-", "https://ifconfig.me/ip"]
-    },
-    {
-      source: "device-toybox-wget-ipinfo",
-      args: ["-s", serial, "shell", "toybox", "wget", "-qO-", "https://ipinfo.io/ip"]
-    }
-  ];
+  const helperResult = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    path.join(SCRIPTS_DIR, "check-device-ip.ps1"),
+    "-Serial",
+    serial,
+    "-SettingsPath",
+    SETTINGS_PATH
+  ], {
+    cwd: ROOT,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 20000
+  });
 
+  let helperPayload = null;
   let resolvedIp = "";
   let resolvedSource = "";
   let failure = "";
+  try {
+    helperPayload = JSON.parse(String(helperResult.stdout || "{}").trim() || "{}");
+  } catch (error) {
+    helperPayload = null;
+  }
 
-  for (const attempt of attempts) {
-    const result = spawnSync(settings.adbPath || "adb", attempt.args, {
-      cwd: ROOT,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 15000
-    });
-
-    if (result.error || result.status !== 0) {
-      failure = result.error ? result.error.message : String(result.stderr || result.stdout || "").trim();
-      continue;
-    }
-
-    const parsedIp = parsePublicIp(String(result.stdout || ""));
-    if (parsedIp) {
-      resolvedIp = parsedIp;
-      resolvedSource = attempt.source;
-      break;
-    }
-
-    failure = "No IP address found in device-side command output.";
+  if (helperPayload?.success) {
+    resolvedIp = helperPayload.ip || "";
+    resolvedSource = helperPayload.source || "";
+  } else {
+    failure = helperPayload?.error || helperResult.error?.message || String(helperResult.stderr || helperResult.stdout || "").trim() || "No device-side IP method succeeded.";
   }
 
   const checkedAt = new Date().toISOString();
@@ -912,7 +940,7 @@ function performDevicePublicIpCheck(serial, reason) {
   }
   saveDeviceIpHistory();
 
-  logIpCheck(`SUCCESS reason=${reason} ip=${resolvedIp} status=${status} source=${resolvedSource}`, serial);
+  logIpCheck(`SUCCESS startedAt=${startedAt} reason=${reason} ip=${resolvedIp} status=${status} source=${resolvedSource}`, serial);
   logActivity("ip-check", `Public IP ${resolvedIp} verified via ${resolvedSource} (${status})`, serial);
   return { success: true, publicIp: publicIpState };
 }

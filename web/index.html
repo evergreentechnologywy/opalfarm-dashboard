@@ -89,18 +89,26 @@
 
         <div class="device-fields">
           <label>
-            <span>Assigned SIM</span>
-            <input class="sim-input" type="text" placeholder="SIM label" />
+            <span>Nickname</span>
+            <input class="nickname-input" type="text" placeholder="Device nickname" />
           </label>
           <label>
-            <span>Assigned Proxy</span>
-            <input class="proxy-input" type="text" placeholder="Proxy label" />
+            <span>Role</span>
+            <select class="role-select">
+              <option value="hotspot-client">Hotspot Client</option>
+              <option value="hotspot-provider">Hotspot Provider</option>
+            </select>
+          </label>
+          <label>
+            <span>Parent Hotspot Serial</span>
+            <input class="parent-hotspot-input" type="text" placeholder="Optional parent hotspot serial" />
           </label>
         </div>
 
         <div class="device-meta">
           <div><span>ADB State</span><strong class="adb-state"></strong></div>
           <div><span>Session</span><strong class="session-state"></strong></div>
+          <div><span>Role</span><strong class="role-value"></strong></div>
           <div><span>Transport</span><strong class="transport-id"></strong></div>
         </div>
 
@@ -132,7 +140,7 @@
           <button class="button action-prep">Prep Device</button>
           <button class="button button-secondary action-start">Start Session</button>
           <button class="button button-secondary action-stop">Stop Session</button>
-          <button class="button button-ghost action-save">Save SIM/Proxy</button>
+          <button class="button button-ghost action-save">Save Device Info</button>
         </div>
       </article>
     </template>

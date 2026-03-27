@@ -194,11 +194,13 @@ h1 {
   color: var(--muted);
 }
 
-.device-fields input {
+.device-fields input,
+.device-fields select {
   border: 1px solid rgba(69, 45, 24, 0.18);
   border-radius: 12px;
   padding: 12px 14px;
   font-size: 1rem;
+  background: #fff;
 }
 
 .device-meta {

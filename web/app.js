@@ -169,6 +169,7 @@ function renderDevice(device) {
   const prepBadge = fragment.querySelector(".prep-badge");
   const adbState = fragment.querySelector(".adb-state");
   const sessionState = fragment.querySelector(".session-state");
+  const roleValue = fragment.querySelector(".role-value");
   const transportId = fragment.querySelector(".transport-id");
   const ipAddress = fragment.querySelector(".ip-address");
   const ipMeta = fragment.querySelector(".ip-meta");
@@ -178,22 +179,25 @@ function renderDevice(device) {
   const publicIpBadge = fragment.querySelector(".public-ip-badge");
   const flagChanged = fragment.querySelector(".flag-changed");
   const flagDuplicate = fragment.querySelector(".flag-duplicate");
-  const simInput = fragment.querySelector(".sim-input");
-  const proxyInput = fragment.querySelector(".proxy-input");
+  const nicknameInput = fragment.querySelector(".nickname-input");
+  const roleSelect = fragment.querySelector(".role-select");
+  const parentHotspotInput = fragment.querySelector(".parent-hotspot-input");
 
   serial.textContent = device.serial;
-  model.textContent = [device.model, device.product].filter(Boolean).join(" | ") || "Unknown model";
+  model.textContent = [device.nickname || "", device.model, device.product].filter(Boolean).join(" | ") || "Unknown model";
   statusBadge.textContent = device.online ? "Online" : "Offline";
   statusBadge.className = `badge status-badge ${device.online ? "badge-online" : "badge-offline"}`;
   prepBadge.textContent = (device.prepState || "idle").toUpperCase();
   prepBadge.className = `badge prep-badge badge-${device.prepState || "idle"}`;
   adbState.textContent = device.adbState || "unknown";
   sessionState.textContent = device.sessionState || "stopped";
+  roleValue.textContent = device.role || "hotspot-client";
   transportId.textContent = device.transportId || "-";
   renderNetwork(device.network || {}, ipAddress, ipMeta, networkBadge);
   renderPublicIp(device.publicIp || {}, publicIpAddress, publicIpMeta, publicIpBadge, flagChanged, flagDuplicate);
-  simInput.value = device.sim || "";
-  proxyInput.value = device.proxy || "";
+  nicknameInput.value = device.nickname || "";
+  roleSelect.value = device.role || "hotspot-client";
+  parentHotspotInput.value = device.parentHotspotSerial || "";
 
   fragment.querySelector(".action-check-ip").addEventListener("click", () => invokeDeviceAction(device.serial, "check-ip"));
   fragment.querySelector(".action-open").addEventListener("click", () => invokeDeviceAction(device.serial, "open-control"));
@@ -202,8 +206,9 @@ function renderDevice(device) {
   fragment.querySelector(".action-stop").addEventListener("click", () => invokeDeviceAction(device.serial, "stop-session"));
   fragment.querySelector(".action-save").addEventListener("click", async () => {
     await invokeDeviceAction(device.serial, "metadata", {
-      sim: simInput.value,
-      proxy: proxyInput.value
+      nickname: nicknameInput.value,
+      role: roleSelect.value,
+      parentHotspotSerial: parentHotspotInput.value
     });
   });
 

@@ -4,10 +4,10 @@
   "adbPath": "C:\\Users\\juanp\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\\platform-tools\\adb.exe",
   "scrcpyPath": "C:\\Users\\juanp\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Genymobile.scrcpy_Microsoft.Winget.Source_8wekyb3d8bbwe\\scrcpy-win64-v3.3.4\\scrcpy.exe",
   "pollIntervalMs": 5000,
+  "ipRefreshIntervalMs": 15000,
   "prep": {
     "minWaitSeconds": 25,
     "maxWaitSeconds": 45,
     "onlineTimeoutSeconds": 90
-  },
-  "deviceMetadata": {}
+  }
 }

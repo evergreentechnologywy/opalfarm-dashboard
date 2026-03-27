@@ -11,6 +11,7 @@ $root = Split-Path -Parent $PSScriptRoot
 if (-not $SettingsPath) {
   $SettingsPath = Join-Path $root "config\\settings.json"
 }
+$devicesPath = Join-Path $root "config\\devices.json"
 if (-not $ActivityLogPath) {
   $ActivityLogPath = Join-Path $root "logs\\activity.log"
 }
@@ -39,6 +40,22 @@ function Get-Settings {
       maxWaitSeconds = 45
       onlineTimeoutSeconds = 90
     }
+  }
+}
+
+function Get-DeviceConfig {
+  if (Test-Path $devicesPath) {
+    $config = Get-Content -Raw -Path $devicesPath | ConvertFrom-Json
+    $device = $config.devices | Where-Object { $_.serial -eq $Serial } | Select-Object -First 1
+    if ($device) {
+      return $device
+    }
+  }
+
+  return [pscustomobject]@{
+    serial = $Serial
+    role = "hotspot-client"
+    parentHotspotSerial = ""
   }
 }
 
@@ -118,8 +135,25 @@ function Enable-Hotspot {
   throw "Unable to re-enable hotspot through ADB on this device or ROM."
 }
 
+function Wait-ForNetworkRecovery {
+  param([int]$TimeoutSeconds)
+
+  Write-PrepLog -Category "prep" -Message "Waiting for client network recovery"
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  while ((Get-Date) -lt $deadline) {
+    $result = Invoke-Adb -Arguments @("-s", $Serial, "shell", "getprop", "sys.boot_completed") -IgnoreErrors
+    $route = Invoke-Adb -Arguments @("-s", $Serial, "shell", "ip", "route") -IgnoreErrors
+    if (($result.Output -match "1") -and ($route.Output -match "default|src\s+\d{1,3}(?:\.\d{1,3}){3}")) {
+      return
+    }
+    Start-Sleep -Seconds 4
+  }
+  throw "Client network recovery timed out."
+}
+
 try {
   $settings = Get-Settings
+  $deviceConfig = Get-DeviceConfig
   $script:AdbPath = if ($settings.adbPath) { $settings.adbPath } else { "adb" }
   $prepSettings = if ($settings.prep) { $settings.prep } else { [pscustomobject]@{ minWaitSeconds = 25; maxWaitSeconds = 45; onlineTimeoutSeconds = 90 } }
   $minWait = [int]$prepSettings.minWaitSeconds
@@ -133,7 +167,12 @@ try {
   Write-PrepLog -Category "prep" -Message "Sleeping for randomized hold: $randomWait seconds"
   Start-Sleep -Seconds $randomWait
   Set-AirplaneMode -Enabled $false
-  Enable-Hotspot
+  if ($deviceConfig.role -eq "hotspot-provider") {
+    Enable-Hotspot
+  } else {
+    Write-PrepLog -Category "prep" -Message "Device role is hotspot-client; hotspot re-enable skipped"
+    Wait-ForNetworkRecovery -TimeoutSeconds $timeout
+  }
   Wait-ForDeviceOnline -TimeoutSeconds $timeout
   Write-PrepLog -Category "prep" -Message "Prep sequence completed successfully"
   exit 0
