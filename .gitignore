@@ -1,0 +1,5 @@
+logs/
+phonefarm.pid
+config/state.json
+.DS_Store
+Thumbs.db

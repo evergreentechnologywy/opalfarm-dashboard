@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PhoneFarm Dashboard</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Local Android Device Dashboard</p>
+          <h1>PhoneFarm Control</h1>
+          <p class="subtitle">Visible device status, prep queue control, recent activity, and per-device actions from one local browser tab.</p>
+        </div>
+        <div class="hero-actions">
+          <button id="refreshButton" class="button button-secondary">Refresh</button>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel queue-panel">
+          <div class="panel-header">
+            <h2>Prep Queue</h2>
+            <span id="preparingBadge" class="badge badge-neutral">Idle</span>
+          </div>
+          <div id="queueList" class="queue-list"></div>
+        </section>
+
+        <section class="panel devices-panel">
+          <div class="panel-header">
+            <h2>Devices</h2>
+            <span id="deviceCount" class="count-pill">0 devices</span>
+          </div>
+          <div id="deviceGrid" class="device-grid"></div>
+        </section>
+
+        <section class="panel activity-panel">
+          <div class="panel-header">
+            <h2>Recent Activity</h2>
+          </div>
+          <div id="activityList" class="activity-list"></div>
+        </section>
+      </main>
+    </div>
+
+    <template id="deviceCardTemplate">
+      <article class="device-card">
+        <div class="device-card-header">
+          <div>
+            <h3 class="serial"></h3>
+            <p class="model"></p>
+          </div>
+          <div class="badges">
+            <span class="badge badge-status status-badge"></span>
+            <span class="badge badge-prep prep-badge"></span>
+          </div>
+        </div>
+
+        <div class="device-fields">
+          <label>
+            <span>Assigned SIM</span>
+            <input class="sim-input" type="text" placeholder="SIM label" />
+          </label>
+          <label>
+            <span>Assigned Proxy</span>
+            <input class="proxy-input" type="text" placeholder="Proxy label" />
+          </label>
+        </div>
+
+        <div class="device-meta">
+          <div><span>ADB State</span><strong class="adb-state"></strong></div>
+          <div><span>Session</span><strong class="session-state"></strong></div>
+          <div><span>Transport</span><strong class="transport-id"></strong></div>
+        </div>
+
+        <div class="device-actions">
+          <button class="button action-open">Open Control</button>
+          <button class="button action-prep">Prep Device</button>
+          <button class="button button-secondary action-start">Start Session</button>
+          <button class="button button-secondary action-stop">Stop Session</button>
+          <button class="button button-ghost action-save">Save SIM/Proxy</button>
+        </div>
+      </article>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
