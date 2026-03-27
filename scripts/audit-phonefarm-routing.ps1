@@ -4,6 +4,17 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $outputPath = Join-Path $root "config\routing-audit.json"
+$dashboardPort = 7780
+$phoneFarmHost = "127.0.0.1"
+
+try {
+  $settingsPath = Join-Path $root "config\settings.json"
+  if (Test-Path $settingsPath) {
+    $settings = Get-Content -Raw -Path $settingsPath | ConvertFrom-Json
+    if ($settings.port) { $dashboardPort = [int]$settings.port }
+    if ($settings.host) { $phoneFarmHost = [string]$settings.host }
+  }
+} catch {}
 
 function New-Check {
   param(
@@ -20,6 +31,7 @@ function New-Check {
 }
 
 $checks = @()
+$checks += New-Check -Name "PhoneFarm Bind Mode" -Ok ($phoneFarmHost -eq "127.0.0.1") -Detail "PhoneFarm host binding: $phoneFarmHost"
 
 try {
   $tailscaleCommand = Get-Command tailscale -ErrorAction SilentlyContinue
@@ -30,6 +42,27 @@ try {
 }
 catch {
   $checks += New-Check -Name "Tailscale Exit Node" -Ok $true -Detail "Tailscale status unavailable; no exit-node evidence from audit."
+}
+
+try {
+  $tailscaleCommand = Get-Command tailscale -ErrorAction SilentlyContinue
+  $tailscaleExe = if ($tailscaleCommand) { $tailscaleCommand.Source } else { "C:\Program Files\Tailscale\tailscale.exe" }
+  $tailscale = & $tailscaleExe status --json | ConvertFrom-Json
+  $serve = & $tailscaleExe serve status --json | ConvertFrom-Json
+  $dnsName = if ($tailscale.Self.DNSName) { $tailscale.Self.DNSName.TrimEnd('.') } else { "" }
+  $serveProxy = ""
+  if ($dnsName -and $serve.Web) {
+    $serveKey = "$dnsName`:$dashboardPort"
+    $webEntry = $serve.Web.PSObject.Properties | Where-Object { $_.Name -eq $serveKey } | Select-Object -First 1
+    if ($webEntry -and $webEntry.Value.Handlers -and $webEntry.Value.Handlers."/".Proxy) {
+      $serveProxy = $webEntry.Value.Handlers."/".Proxy
+    }
+  }
+  $expectedProxy = "http://127.0.0.1:$dashboardPort"
+  $checks += New-Check -Name "Tailscale Dashboard Exposure" -Ok ($serveProxy -eq $expectedProxy) -Detail (if ($serveProxy) { "Tailscale serve proxy for PhoneFarm: $serveProxy" } else { "No Tailscale serve mapping found for PhoneFarm on port $dashboardPort." })
+}
+catch {
+  $checks += New-Check -Name "Tailscale Dashboard Exposure" -Ok $false -Detail "Could not verify the Tailscale serve mapping for PhoneFarm."
 }
 
 try {
@@ -61,8 +94,17 @@ catch {
 }
 
 try {
-  $tcpip = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters' -ErrorAction Stop
-  $ipEnableRouter = [int]($tcpip.IPEnableRouter | ForEach-Object { $_ })
+  $pcPublicIp = (Invoke-WebRequest -UseBasicParsing -Uri "https://api64.ipify.org?format=text" -TimeoutSec 8).Content.Trim()
+  $checks += New-Check -Name "PC Public IP" -Ok ([bool]$pcPublicIp) -Detail "PC public IP from the PC-side path: $pcPublicIp"
+}
+catch {
+  $checks += New-Check -Name "PC Public IP" -Ok $false -Detail "Could not retrieve the PC public IP for comparison."
+}
+
+try {
+  $query = reg query HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters /v IPEnableRouter 2>$null | Out-String
+  $match = [regex]::Match($query, 'IPEnableRouter\s+REG_DWORD\s+0x([0-9a-fA-F]+)')
+  $ipEnableRouter = if ($match.Success) { [Convert]::ToInt32($match.Groups[1].Value, 16) } else { 0 }
   $checks += New-Check -Name "IPv4 Forwarding" -Ok ($ipEnableRouter -eq 0) -Detail (if ($ipEnableRouter -eq 0) { "Global IP forwarding is disabled." } else { "Global IP forwarding is enabled via IPEnableRouter." })
 }
 catch {
@@ -74,6 +116,8 @@ $result = [pscustomobject]@{
   checkedAt = (Get-Date).ToString("o")
   overallOk = $overallOk
   summary = if ($overallOk) { "No obvious PC gateway or proxy routing flags detected." } else { "One or more routing or proxy checks need attention." }
+  dashboardAccessPath = "Operator -> Tailscale -> localhost PhoneFarm dashboard on this PC"
+  deviceTrafficPath = "Phone -> its own network path -> website"
   checks = $checks
 }
 

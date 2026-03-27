@@ -32,6 +32,61 @@ Local dashboard URL:
 http://127.0.0.1:7780
 ```
 
+## Remote Access via Tailscale
+
+PhoneFarm remote access is supported through Tailscale for operator access only.
+
+How it works:
+
+- PhoneFarm itself remains bound to `127.0.0.1`.
+- Tailscale publishes the dashboard to the tailnet by proxying to `http://127.0.0.1:7780`.
+- This preserves the separation between operator access and phone web traffic.
+
+Enable Tailscale access:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\enable-tailscale-access.ps1
+```
+
+Disable Tailscale access:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File C:\PhoneFarm\scripts\disable-tailscale-access.ps1
+```
+
+Addresses to use:
+
+- local access: `http://127.0.0.1:7780`
+- Tailscale remote access: `http://surfacepro.tail50b6ba.ts.net:7780/`
+
+How to verify phone traffic is still independent:
+
+1. Open the `Routing Safety` panel in the dashboard.
+2. Note the `PC Public IP` shown there.
+3. Run `Check IP` on a phone and compare the phone-reported public IP widget.
+4. Tailscale remote access must not change the phone-reported public IP.
+5. If the phone public IP unexpectedly matches the PC public IP when it should be using mobile data or a provider phone path, review routing before using it.
+
+Settings that must remain disabled to avoid leakage or routing changes:
+
+- Tailscale exit-node mode on this PC
+- Internet Connection Sharing on this PC
+- PC-hosted proxying for phone browsing
+- global IP forwarding on this PC
+
+Traffic-path model:
+
+- operator access path: `You -> Tailscale -> local PC dashboard`
+- device traffic path: `Phone -> its own network -> website`
+
+Misrouting indicators:
+
+- the dashboard is no longer bound to `127.0.0.1`
+- Tailscale is not proxying to `http://127.0.0.1:7780`
+- Internet Connection Sharing becomes enabled
+- the PC is configured as a Tailscale exit node
+- a phone's public IP unexpectedly flips to the PC's public IP
+
 ## Required Tools
 
 - Node.js
@@ -202,7 +257,8 @@ Minimum fallback path:
 ## Local Security
 
 - PhoneFarm is configured to bind to `127.0.0.1`.
-- No public services are exposed by default.
+- Tailscale remote access, when enabled, is provided by Tailscale proxying to localhost.
+- No public internet services are exposed by default.
 - Only local scripts under `C:\PhoneFarm` are used for device actions.
 
 ## Deployment Summary
@@ -248,3 +304,11 @@ Known limitations:
 - Airplane mode and hotspot control vary by Android version and OEM ROM.
 - Device-side public IP verification depends on shell HTTP tooling available on the phone.
 - DeviceFarmer/STF is documented as a fallback path, not the active Windows runtime on this host.
+
+Remote access summary:
+
+- local dashboard URL: `http://127.0.0.1:7780`
+- Tailscale dashboard URL: `http://surfacepro.tail50b6ba.ts.net:7780/`
+- service bind mode: localhost only
+- remote access mode: Tailscale proxy to localhost
+- device traffic routed through the PC: not configured and should remain disabled
