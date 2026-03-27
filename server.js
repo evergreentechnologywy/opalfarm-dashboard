@@ -14,7 +14,9 @@ const SETTINGS_PATH = path.join(CONFIG_DIR, "settings.json");
 const STATE_PATH = path.join(CONFIG_DIR, "state.json");
 const USERS_PATH = path.join(CONFIG_DIR, "users.json");
 const ROUTING_AUDIT_PATH = path.join(CONFIG_DIR, "routing-audit.json");
+const DEVICE_IP_HISTORY_PATH = path.join(CONFIG_DIR, "device-ip-history.json");
 const ACTIVITY_LOG_PATH = path.join(LOG_DIR, "activity.log");
+const IP_CHECK_LOG_PATH = path.join(LOG_DIR, "ip-check.log");
 const PID_PATH = path.join(ROOT, "phonefarm.pid");
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -39,6 +41,10 @@ const DEFAULT_STATE = {
   recentActivity: []
 };
 
+const DEFAULT_IP_HISTORY = {
+  devices: {}
+};
+
 const DEFAULT_USERS = {
   users: [
     {
@@ -58,13 +64,16 @@ let preparingSerial = null;
 let deviceCache = {};
 let lastIpRefreshAt = 0;
 let lastRoutingAuditAt = 0;
+let deviceIpHistory = loadJson(DEVICE_IP_HISTORY_PATH, DEFAULT_IP_HISTORY);
 const missingTools = new Set();
 const sessions = new Map();
+const ipCheckPromises = new Map();
 
 ensureDirectories();
 writeJsonIfMissing(SETTINGS_PATH, settings);
 writeJsonIfMissing(STATE_PATH, state);
 writeJsonIfMissing(USERS_PATH, usersConfig);
+writeJsonIfMissing(DEVICE_IP_HISTORY_PATH, deviceIpHistory);
 fs.writeFileSync(PID_PATH, String(process.pid));
 
 process.on("exit", cleanupPid);
@@ -194,6 +203,10 @@ function saveSettings() {
   fs.writeFileSync(SETTINGS_PATH, `${JSON.stringify(settings, null, 2)}\n`);
 }
 
+function saveDeviceIpHistory() {
+  fs.writeFileSync(DEVICE_IP_HISTORY_PATH, `${JSON.stringify(deviceIpHistory, null, 2)}\n`);
+}
+
 function trimRecentActivity() {
   if ((state.recentActivity || []).length > 200) {
     state.recentActivity = state.recentActivity.slice(0, 200);
@@ -212,6 +225,12 @@ function logActivity(category, message, serial = null) {
   fs.appendFileSync(ACTIVITY_LOG_PATH, line);
   state.recentActivity = [entry, ...(state.recentActivity || [])].slice(0, 200);
   saveState();
+}
+
+function logIpCheck(message, serial = null) {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}]${serial ? ` [${serial}]` : ""} ${message}\n`;
+  fs.appendFileSync(IP_CHECK_LOG_PATH, line);
 }
 
 function parseCookies(cookieHeader) {
@@ -315,7 +334,7 @@ function filterRecentActivityForUser(user) {
 }
 
 function buildStatus(user) {
-  const visibleDevices = filterDevicesForUser(user);
+  const visibleDevices = applyDuplicateFlags(filterDevicesForUser(user));
   const visibleSerials = new Set(visibleDevices.map(device => device.serial));
   const visibleQueue = (state.queue || []).filter(serial => visibleSerials.has(serial));
   const visiblePreparing = preparingSerial && visibleSerials.has(preparingSerial) ? preparingSerial : null;
@@ -389,6 +408,10 @@ function readJsonBody(req) {
 }
 
 function handleDeviceAction(res, user, serial, action, body) {
+  return handleDeviceActionAsync(res, user, serial, action, body);
+}
+
+async function handleDeviceActionAsync(res, user, serial, action, body) {
   if (!userCanAccessDevice(user, serial)) {
     return sendJson(res, 403, { error: "You do not have access to this device" });
   }
@@ -412,7 +435,22 @@ function handleDeviceAction(res, user, serial, action, body) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (action === "check-ip") {
+    if (ipCheckPromises.has(serial)) {
+      return sendJson(res, 409, { error: "An IP check is already running for this device" });
+    }
+    const result = await runDevicePublicIpCheck(serial, "manual");
+    if (!result.success) {
+      return sendJson(res, 500, { error: result.error || "IP check failed", ipCheck: result.publicIp });
+    }
+    return sendJson(res, 200, { ok: true, ipCheck: result.publicIp });
+  }
+
   if (action === "start-session") {
+    const verification = await runDevicePublicIpCheck(serial, "pre-session");
+    if (!verification.success) {
+      return sendJson(res, 409, { error: verification.error || "IP verification failed; session not started" });
+    }
     updateDeviceState(serial, { sessionState: "running", sessionStartedAt: new Date().toISOString() });
     logActivity("session", `Session started by ${user.username}`, serial);
     return sendJson(res, 200, { ok: true });
@@ -442,6 +480,16 @@ function handleDeviceAction(res, user, serial, action, body) {
 }
 
 function buildMissingDevice(serial) {
+  const existingPublicIp = state.devices?.[serial]?.publicIp || {
+    currentIp: "",
+    lastCheckedAt: "",
+    status: "unknown",
+    source: "",
+    changedSinceLastPrep: false,
+    duplicateWith: [],
+    lastError: "",
+    lastReason: ""
+  };
   return {
     serial,
     adbState: "unknown",
@@ -458,6 +506,7 @@ function buildMissingDevice(serial) {
       status: "unknown",
       checkedAt: ""
     },
+    publicIp: existingPublicIp,
     prepState: state.devices?.[serial]?.prepState || "idle",
     prepMessage: state.devices?.[serial]?.prepMessage || "",
     sessionState: state.devices?.[serial]?.sessionState || "stopped"
@@ -500,6 +549,7 @@ function refreshDevices() {
       sim: metadata.sim || "",
       proxy: metadata.proxy || "",
       network,
+      publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
       prepState: stored.prepState || "idle",
       prepMessage: stored.prepMessage || "",
       sessionState: stored.sessionState || "stopped",
@@ -525,6 +575,7 @@ function refreshDevices() {
         status: "offline",
         checkedAt: new Date().toISOString()
       };
+      preserved.publicIp = state.devices?.[serial]?.publicIp || previous[serial]?.publicIp || preserved.publicIp;
       next[serial] = preserved;
       if (previous[serial].online) {
         logActivity("disconnect", "Device disconnected from ADB", serial);
@@ -536,6 +587,32 @@ function refreshDevices() {
   if (shouldRefreshNetwork) {
     lastIpRefreshAt = Date.now();
   }
+}
+
+function applyDuplicateFlags(devices) {
+  const counts = new Map();
+  for (const device of devices) {
+    const ip = device.publicIp?.currentIp;
+    if (!ip) continue;
+    counts.set(ip, (counts.get(ip) || 0) + 1);
+  }
+
+  return devices.map(device => {
+    const ip = device.publicIp?.currentIp || "";
+    const duplicate = ip && (counts.get(ip) || 0) > 1;
+    return {
+      ...device,
+      publicIp: {
+        ...(device.publicIp || {}),
+        duplicateWith: duplicate
+          ? devices.filter(other => other.serial !== device.serial && other.publicIp?.currentIp === ip).map(other => other.serial)
+          : [],
+        status: duplicate && (device.publicIp?.status === "verified" || device.publicIp?.status === "changed")
+          ? "duplicate"
+          : (device.publicIp?.status || "unknown")
+      }
+    };
+  });
 }
 
 function queryAdbDevices() {
@@ -697,6 +774,174 @@ function parseNetworkOutput(output, source) {
   return { ipAddress: "", interface: "" };
 }
 
+async function runDevicePublicIpCheck(serial, reason) {
+  if (ipCheckPromises.has(serial)) {
+    return ipCheckPromises.get(serial);
+  }
+
+  const promise = Promise.resolve().then(() => performDevicePublicIpCheck(serial, reason));
+  ipCheckPromises.set(serial, promise);
+  try {
+    return await promise;
+  } finally {
+    ipCheckPromises.delete(serial);
+  }
+}
+
+function performDevicePublicIpCheck(serial, reason) {
+  const startedAt = new Date().toISOString();
+  const deviceState = state.devices?.[serial] || {};
+  const history = ensureDeviceIpHistory(serial);
+  const attempts = [
+    {
+      source: "device-curl-ipify",
+      args: ["-s", serial, "shell", "curl", "-fsSL", "https://api64.ipify.org?format=text"]
+    },
+    {
+      source: "device-toybox-wget-ipify",
+      args: ["-s", serial, "shell", "toybox", "wget", "-qO-", "https://api64.ipify.org?format=text"]
+    },
+    {
+      source: "device-wget-ifconfigme",
+      args: ["-s", serial, "shell", "wget", "-qO-", "https://ifconfig.me/ip"]
+    },
+    {
+      source: "device-toybox-wget-ipinfo",
+      args: ["-s", serial, "shell", "toybox", "wget", "-qO-", "https://ipinfo.io/ip"]
+    }
+  ];
+
+  let resolvedIp = "";
+  let resolvedSource = "";
+  let failure = "";
+
+  for (const attempt of attempts) {
+    const result = spawnSync(settings.adbPath || "adb", attempt.args, {
+      cwd: ROOT,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 15000
+    });
+
+    if (result.error || result.status !== 0) {
+      failure = result.error ? result.error.message : String(result.stderr || result.stdout || "").trim();
+      continue;
+    }
+
+    const parsedIp = parsePublicIp(String(result.stdout || ""));
+    if (parsedIp) {
+      resolvedIp = parsedIp;
+      resolvedSource = attempt.source;
+      break;
+    }
+
+    failure = "No IP address found in device-side command output.";
+  }
+
+  const checkedAt = new Date().toISOString();
+  if (!resolvedIp) {
+    const failedState = {
+      currentIp: deviceState.publicIp?.currentIp || "",
+      lastCheckedAt: checkedAt,
+      status: "failed",
+      source: resolvedSource,
+      changedSinceLastPrep: Boolean(deviceState.publicIp?.changedSinceLastPrep),
+      duplicateWith: [],
+      lastError: failure || "Public IP lookup failed on device side.",
+      lastReason: reason
+    };
+    updateDeviceState(serial, { publicIp: failedState });
+    history.entries = [
+      {
+        timestamp: checkedAt,
+        ip: "",
+        reason,
+        source: resolvedSource,
+        status: "failed",
+        error: failedState.lastError
+      },
+      ...(history.entries || [])
+    ].slice(0, 50);
+    saveDeviceIpHistory();
+    logIpCheck(`FAILED reason=${reason} error=${failedState.lastError}`, serial);
+    logActivity("ip-check", `Public IP check failed: ${failedState.lastError}`, serial);
+    return { success: false, error: failedState.lastError, publicIp: failedState };
+  }
+
+  const previousSuccessfulPrepIp = history.lastSuccessfulPrepIp || "";
+  const changedSinceLastPrep = Boolean(previousSuccessfulPrepIp && previousSuccessfulPrepIp !== resolvedIp);
+  let status = changedSinceLastPrep ? "changed" : "verified";
+  const currentOtherDevices = Object.values(deviceCache).filter(device => device.serial !== serial);
+  const duplicateWith = currentOtherDevices
+    .filter(device => device.publicIp?.currentIp && device.publicIp.currentIp === resolvedIp)
+    .map(device => device.serial);
+  if (duplicateWith.length) {
+    status = "duplicate";
+  }
+
+  const publicIpState = {
+    currentIp: resolvedIp,
+    lastCheckedAt: checkedAt,
+    status,
+    source: resolvedSource,
+    changedSinceLastPrep,
+    duplicateWith,
+    lastError: "",
+    lastReason: reason
+  };
+
+  updateDeviceState(serial, { publicIp: publicIpState });
+
+  history.entries = [
+    {
+      timestamp: checkedAt,
+      ip: resolvedIp,
+      reason,
+      source: resolvedSource,
+      status,
+      changedSinceLastPrep,
+      duplicateWith
+    },
+    ...(history.entries || [])
+  ].slice(0, 50);
+  history.lastSuccessfulIp = resolvedIp;
+  history.lastVerifiedAt = checkedAt;
+  if (reason === "post-prep") {
+    history.lastSuccessfulPrepIp = resolvedIp;
+    history.lastSuccessfulPrepAt = checkedAt;
+  }
+  saveDeviceIpHistory();
+
+  logIpCheck(`SUCCESS reason=${reason} ip=${resolvedIp} status=${status} source=${resolvedSource}`, serial);
+  logActivity("ip-check", `Public IP ${resolvedIp} verified via ${resolvedSource} (${status})`, serial);
+  return { success: true, publicIp: publicIpState };
+}
+
+function ensureDeviceIpHistory(serial) {
+  if (!deviceIpHistory.devices) {
+    deviceIpHistory.devices = {};
+  }
+  if (!deviceIpHistory.devices[serial]) {
+    deviceIpHistory.devices[serial] = {
+      entries: [],
+      lastSuccessfulIp: "",
+      lastSuccessfulPrepIp: "",
+      lastVerifiedAt: "",
+      lastSuccessfulPrepAt: ""
+    };
+  }
+  return deviceIpHistory.devices[serial];
+}
+
+function parsePublicIp(output) {
+  const normalized = String(output || "").trim();
+  const ipv4 = normalized.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/);
+  if (ipv4) return ipv4[0];
+  const ipv6 = normalized.match(/\b(?:[a-fA-F0-9]{1,4}:){2,}[a-fA-F0-9]{1,4}\b/);
+  if (ipv6) return ipv6[0];
+  return "";
+}
+
 function processPrepQueue() {
   if (preparingSerial || !(state.queue || []).length) return;
   const serial = state.queue[0];
@@ -718,6 +963,11 @@ function processPrepQueue() {
       prepMessage: success ? "Prep completed successfully" : "Prep failed; review logs"
     });
     logActivity("queue", success ? "Prep completed" : `Prep failed with exit code ${code}`, serial);
+    if (success) {
+      runDevicePublicIpCheck(serial, "post-prep").catch(error => {
+        logActivity("ip-check", `Automatic post-prep IP check failed: ${error.message}`, serial);
+      });
+    }
     preparingSerial = null;
     refreshDevices();
     processPrepQueue();

@@ -248,6 +248,17 @@ h1 {
   color: var(--muted);
 }
 
+.public-ip-panel {
+  background: linear-gradient(135deg, rgba(255, 244, 229, 0.9), rgba(245, 236, 226, 0.88));
+}
+
+.public-ip-flags {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .button {
   appearance: none;
   border: 0;

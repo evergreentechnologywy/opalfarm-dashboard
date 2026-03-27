@@ -173,6 +173,11 @@ function renderDevice(device) {
   const ipAddress = fragment.querySelector(".ip-address");
   const ipMeta = fragment.querySelector(".ip-meta");
   const networkBadge = fragment.querySelector(".network-badge");
+  const publicIpAddress = fragment.querySelector(".public-ip-address");
+  const publicIpMeta = fragment.querySelector(".public-ip-meta");
+  const publicIpBadge = fragment.querySelector(".public-ip-badge");
+  const flagChanged = fragment.querySelector(".flag-changed");
+  const flagDuplicate = fragment.querySelector(".flag-duplicate");
   const simInput = fragment.querySelector(".sim-input");
   const proxyInput = fragment.querySelector(".proxy-input");
 
@@ -186,9 +191,11 @@ function renderDevice(device) {
   sessionState.textContent = device.sessionState || "stopped";
   transportId.textContent = device.transportId || "-";
   renderNetwork(device.network || {}, ipAddress, ipMeta, networkBadge);
+  renderPublicIp(device.publicIp || {}, publicIpAddress, publicIpMeta, publicIpBadge, flagChanged, flagDuplicate);
   simInput.value = device.sim || "";
   proxyInput.value = device.proxy || "";
 
+  fragment.querySelector(".action-check-ip").addEventListener("click", () => invokeDeviceAction(device.serial, "check-ip"));
   fragment.querySelector(".action-open").addEventListener("click", () => invokeDeviceAction(device.serial, "open-control"));
   fragment.querySelector(".action-prep").addEventListener("click", () => invokeDeviceAction(device.serial, "prep"));
   fragment.querySelector(".action-start").addEventListener("click", () => invokeDeviceAction(device.serial, "start-session"));
@@ -201,6 +208,35 @@ function renderDevice(device) {
   });
 
   return fragment;
+}
+
+function renderPublicIp(publicIp, addressEl, metaEl, badgeEl, changedEl, duplicateEl) {
+  const status = publicIp.status || "unknown";
+  const ip = publicIp.currentIp || "";
+  const checkedAt = publicIp.lastCheckedAt ? new Date(publicIp.lastCheckedAt).toLocaleString() : "";
+  const source = publicIp.source || "";
+  const duplicateWith = publicIp.duplicateWith || [];
+
+  addressEl.textContent = ip || "Not checked yet";
+  metaEl.textContent = [
+    checkedAt ? `Last checked ${checkedAt}` : "",
+    source ? `Source ${source}` : "",
+    publicIp.lastReason ? `Reason ${publicIp.lastReason}` : "",
+    publicIp.lastError ? `Error ${publicIp.lastError}` : ""
+  ].filter(Boolean).join(" | ");
+
+  badgeEl.textContent = status.toUpperCase();
+  badgeEl.className = `badge public-ip-badge ${publicIpBadgeClass(status)}`;
+  changedEl.textContent = `Changed since last prep/session: ${publicIp.changedSinceLastPrep ? "Yes" : "No"}`;
+  duplicateEl.textContent = `Duplicate with another active phone: ${duplicateWith.length ? `Yes (${duplicateWith.join(", ")})` : "No"}`;
+}
+
+function publicIpBadgeClass(status) {
+  if (status === "verified") return "badge-ready";
+  if (status === "changed") return "badge-preparing";
+  if (status === "duplicate") return "badge-failed";
+  if (status === "failed") return "badge-offline";
+  return "badge-neutral";
 }
 
 function renderNetwork(network, ipAddress, ipMeta, networkBadge) {

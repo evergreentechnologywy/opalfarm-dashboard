@@ -7,7 +7,9 @@ PhoneFarm is a local-first Windows dashboard for Android device management on a 
 - `C:\PhoneFarm\config\settings.json`: local settings, paths, and per-device SIM/proxy metadata.
 - `C:\PhoneFarm\config\state.json`: persisted queue and device state cache.
 - `C:\PhoneFarm\config\users.json`: local user accounts, password hashes, and per-device access scope.
+- `C:\PhoneFarm\config\device-ip-history.json`: public IP history per device serial.
 - `C:\PhoneFarm\logs\activity.log`: shared activity log.
+- `C:\PhoneFarm\logs\ip-check.log`: public IP verification log.
 - `C:\PhoneFarm\logs\prep-<serial>.log`: prep log per device.
 - `C:\PhoneFarm\scripts\`: PowerShell helper scripts.
 - `C:\PhoneFarm\web\`: browser UI assets.
@@ -92,10 +94,46 @@ Notes:
 ## Dashboard Behavior
 
 - Device cards show serial, model, ADB state, prep state, SIM, proxy, and session state.
+- Device cards show the phone's current local IP and a separate public-IP verification widget.
 - `Open Control` launches `scrcpy` for the selected serial only.
+- `Check IP` runs a device-side public IP verification for the selected serial only.
 - `Prep Device` always enqueues the device and never runs concurrently with another prep job.
 - Prep states are `idle`, `queued`, `preparing`, `ready`, and `failed`.
 - `Start Session` and `Stop Session` are explicit operator state markers stored locally.
+
+## Public IP Verification
+
+PhoneFarm can verify each phone's own public IP without using the PC's IP as a substitute.
+
+What it shows per device:
+
+- Current public IP
+- Last checked timestamp
+- IP status: `unknown`, `verified`, `changed`, `duplicate`, `failed`
+- Changed since last prep/session: yes or no
+- Duplicate with another active phone: yes or no
+
+Behavior:
+
+- `Check IP` runs a public IP verification for the selected serial only.
+- A public IP check runs automatically after prep completes successfully.
+- `Start Session` performs a fresh IP verification before marking the session running.
+- Results are written to `C:\PhoneFarm\logs\ip-check.log`.
+- History is written to `C:\PhoneFarm\config\device-ip-history.json`.
+
+Implementation path:
+
+- The check is device-side, not PC-side.
+- PhoneFarm runs device shell commands through `adb -s <serial> shell ...`.
+- It tries on-device HTTP clients such as `curl`, `toybox wget`, and `wget` against public IP endpoints.
+- The request originates from the phone's own network path when those commands are available on the device.
+
+Tradeoffs and limitations:
+
+- This is intentionally not a PC-side lookup.
+- Some Android builds do not ship usable shell HTTP clients. On those devices, the public IP check will show `failed`.
+- If that happens, the next practical path is to install a small helper app on the phone that can fetch and return the public IP under ADB control.
+- Duplicate detection is based on the latest successful public IP checks across currently visible devices.
 
 ## Authentication And Access Control
 
