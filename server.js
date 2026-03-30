@@ -545,14 +545,16 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     if (!verification.success) {
       return sendJson(res, 409, { error: verification.error || "IP verification failed; session not started" });
     }
+    runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: true });
     updateDeviceState(serial, { sessionState: "running", sessionStartedAt: new Date().toISOString() });
-    logActivity("session", `Session started by ${user.username}`, serial);
+    logActivity("session", `Session started by ${user.username} and scrcpy launched`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
   if (action === "stop-session") {
+    runPowerShellScript("stop-scrcpy-for-device.ps1", ["-Serial", serial], { detached: true });
     updateDeviceState(serial, { sessionState: "stopped", sessionStoppedAt: new Date().toISOString() });
-    logActivity("session", `Session stopped by ${user.username}`, serial);
+    logActivity("session", `Session stopped by ${user.username} and scrcpy close requested`, serial);
     return sendJson(res, 200, { ok: true });
   }
 
