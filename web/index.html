@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PhoneFarm Dashboard v20260330b</title>
+    <title>PhoneFarm Dashboard v20260330c</title>
     <script>
       (function setPhoneFarmBasePath() {
         const baseHref = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm/" : "/";
@@ -12,14 +12,14 @@
         document.head.appendChild(base);
       })();
     </script>
-    <link rel="stylesheet" href="styles.css?v=20260330b" />
+    <link rel="stylesheet" href="styles.css?v=20260330c" />
   </head>
   <body>
     <div id="appShell" class="shell">
       <header class="hero">
         <div class="hero-copy">
           <p class="eyebrow">Internal Operations Console</p>
-          <h1>PhoneFarm <span class="build-chip">Build 20260330b</span></h1>
+          <h1>PhoneFarm <span class="build-chip">Build 20260330c</span></h1>
           <p class="subtitle">Daily control surface for USB-connected Android phones, prep orchestration, IP verification, and operator access.</p>
         </div>
         <div class="hero-actions">
@@ -172,6 +172,7 @@
             <span class="badge role-badge"></span>
             <span class="badge prep-badge"></span>
             <span class="badge duplicate-badge" hidden>Duplicate IP</span>
+            <span class="badge reuse-badge" hidden>Reused IP</span>
           </div>
         </div>
 
@@ -207,6 +208,7 @@
         <div class="device-actions">
           <button class="button button-secondary action-open" type="button">Open Control</button>
           <button class="button button-primary action-prep" type="button">Prep Device</button>
+          <button class="button button-secondary action-airplane" type="button">Engage Airplane</button>
           <button class="button button-secondary action-recover" type="button">Recover Radios</button>
           <button class="button button-secondary action-check-ip" type="button">Check IP</button>
           <button class="button button-secondary action-start" type="button">Start Session</button>
@@ -215,6 +217,6 @@
       </article>
     </template>
 
-    <script src="app.js?v=20260330b"></script>
+    <script src="app.js?v=20260330c"></script>
   </body>
 </html>

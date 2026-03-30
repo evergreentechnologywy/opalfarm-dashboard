@@ -540,6 +540,26 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (action === "engage-airplane") {
+    updateDeviceState(serial, { prepMessage: "Engaging airplane mode" });
+    const child = runPowerShellScript(
+      "set-device-airplane-mode.ps1",
+      ["-Serial", serial, "-Mode", "on", "-SettingsPath", SETTINGS_PATH, "-ActivityLogPath", ACTIVITY_LOG_PATH],
+      { detached: false }
+    );
+
+    child.on("exit", code => {
+      const success = code === 0;
+      updateDeviceState(serial, {
+        prepMessage: success ? "Airplane mode requested" : "Airplane mode request failed; review logs"
+      });
+      logActivity("airplane", success ? "Airplane mode engaged" : `Airplane mode request failed with exit code ${code}`, serial);
+    });
+
+    logActivity("airplane", `Airplane mode requested by ${user.username}`, serial);
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (action === "start-session") {
     const verification = await runDevicePublicIpCheck(serial, "pre-session");
     if (!verification.success) {
@@ -583,6 +603,8 @@ function buildMissingDevice(serial) {
     source: "",
     changedSinceLastPrep: false,
     duplicateWith: [],
+    reusedRecently: false,
+    reusedWithinLast22: [],
     lastError: "",
     lastReason: ""
   };
@@ -729,6 +751,26 @@ function applyDuplicateFlags(devices) {
       }
     };
   });
+}
+
+function getRecentSuccessfulIpEntries(limit) {
+  const entries = [];
+  for (const [serial, history] of Object.entries(deviceIpHistory.devices || {})) {
+    for (const entry of history.entries || []) {
+      if (!entry.ip) continue;
+      if (entry.status === "failed") continue;
+      entries.push({
+        serial,
+        ip: entry.ip,
+        timestamp: entry.timestamp || "",
+        reason: entry.reason || "",
+        source: entry.source || ""
+      });
+    }
+  }
+
+  entries.sort((a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime());
+  return entries.slice(0, limit);
 }
 
 function queryAdbDevices() {
@@ -993,6 +1035,8 @@ function performDevicePublicIpCheck(serial, reason) {
       source: resolvedSource,
       changedSinceLastPrep: Boolean(deviceState.publicIp?.changedSinceLastPrep),
       duplicateWith: [],
+      reusedRecently: Boolean(deviceState.publicIp?.reusedRecently),
+      reusedWithinLast22: deviceState.publicIp?.reusedWithinLast22 || [],
       lastError: failure || "Public IP lookup failed on device side.",
       lastReason: reason
     };
@@ -1021,6 +1065,11 @@ function performDevicePublicIpCheck(serial, reason) {
   const duplicateWith = currentOtherDevices
     .filter(device => device.publicIp?.currentIp && device.publicIp.currentIp === resolvedIp)
     .map(device => device.serial);
+  const recentSuccessfulEntries = getRecentSuccessfulIpEntries(22);
+  const reusedWithinLast22 = recentSuccessfulEntries
+    .filter(entry => entry.ip === resolvedIp)
+    .slice(0, 5);
+  const reusedRecently = reusedWithinLast22.length > 0;
   if (duplicateWith.length) {
     status = "duplicate";
   }
@@ -1032,6 +1081,8 @@ function performDevicePublicIpCheck(serial, reason) {
     source: resolvedSource,
     changedSinceLastPrep,
     duplicateWith,
+    reusedRecently,
+    reusedWithinLast22,
     lastError: "",
     lastReason: reason
   };
@@ -1046,7 +1097,8 @@ function performDevicePublicIpCheck(serial, reason) {
       source: resolvedSource,
       status,
       changedSinceLastPrep,
-      duplicateWith
+      duplicateWith,
+      reusedRecently
     },
     ...(history.entries || [])
   ].slice(0, 50);

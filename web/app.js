@@ -284,6 +284,7 @@ function renderTableView(devices) {
         <div class="table-actions">
           <button class="table-action" data-action="open-control">Open Control</button>
           <button class="table-action table-action-primary" data-action="prep">Prep Device</button>
+          <button class="table-action" data-action="engage-airplane">Engage Airplane</button>
           <button class="table-action" data-action="recover-radios">Recover Radios</button>
           <button class="table-action" data-action="check-ip">Check IP</button>
           <button class="table-action" data-action="start-session">Start Session</button>
@@ -312,6 +313,7 @@ function renderDeviceCard(device) {
   const roleBadge = fragment.querySelector(".role-badge");
   const prepBadge = fragment.querySelector(".prep-badge");
   const duplicateBadge = fragment.querySelector(".duplicate-badge");
+  const reuseBadge = fragment.querySelector(".reuse-badge");
   const gmailValue = fragment.querySelector(".gmail-value");
   const publicIpValue = fragment.querySelector(".public-ip-value");
   const lastCheckedValue = fragment.querySelector(".last-checked-value");
@@ -336,9 +338,10 @@ function renderDeviceCard(device) {
   ipStatusValue.textContent = (device.publicIp?.status || "unknown").toUpperCase();
   transportValue.textContent = device.transportId || device.serial;
   changedState.textContent = `Changed since last prep/session: ${device.publicIp?.changedSinceLastPrep ? "Yes" : "No"}`;
-  duplicateState.textContent = `Duplicate warning: ${isDuplicate(device) ? "Yes" : "No"}`;
+  duplicateState.textContent = `IP warning: ${deviceWarningLabel(device)}`;
   prepMessageState.textContent = device.prepMessage || "No prep message";
   duplicateBadge.hidden = !isDuplicate(device);
+  reuseBadge.hidden = !isReused(device);
 
   root.classList.add(`prep-${device.prepState || "idle"}`);
   if (device.prepState === "preparing") root.classList.add("is-preparing");
@@ -347,6 +350,7 @@ function renderDeviceCard(device) {
 
   fragment.querySelector(".action-open").addEventListener("click", () => invokeDeviceAction(device.serial, "open-control"));
   fragment.querySelector(".action-prep").addEventListener("click", () => invokeDeviceAction(device.serial, "prep"));
+  fragment.querySelector(".action-airplane").addEventListener("click", () => invokeDeviceAction(device.serial, "engage-airplane"));
   fragment.querySelector(".action-recover").addEventListener("click", () => invokeDeviceAction(device.serial, "recover-radios"));
   fragment.querySelector(".action-check-ip").addEventListener("click", () => invokeDeviceAction(device.serial, "check-ip"));
   fragment.querySelector(".action-start").addEventListener("click", () => invokeDeviceAction(device.serial, "start-session"));
@@ -372,11 +376,15 @@ function filterDevices(devices) {
 }
 
 function hasWarning(device) {
-  return isDuplicate(device) || device.prepState === "failed" || device.publicIp?.status === "failed" || device.publicIp?.status === "changed";
+  return isDuplicate(device) || isReused(device) || device.prepState === "failed" || device.publicIp?.status === "failed" || device.publicIp?.status === "changed";
 }
 
 function isDuplicate(device) {
   return Boolean(device.publicIp?.duplicateWith && device.publicIp.duplicateWith.length);
+}
+
+function isReused(device) {
+  return Boolean(device.publicIp?.reusedRecently);
 }
 
 function isPrepBlocked(device) {
@@ -385,6 +393,7 @@ function isPrepBlocked(device) {
 
 function deviceWarningLabel(device) {
   if (isDuplicate(device)) return "Duplicate IP";
+  if (isReused(device)) return "Reused IP";
   if (device.publicIp?.status === "changed") return "IP Changed";
   if (device.prepState === "failed") return "Prep Failed";
   if (device.publicIp?.status === "failed") return "IP Check Failed";
