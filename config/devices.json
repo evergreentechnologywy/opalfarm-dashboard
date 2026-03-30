@@ -1,3 +1,46 @@
 {
-  "devices": []
+  "devices": [
+    {
+      "serial": "6F9B97EE",
+      "nickname": "Phone 01",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23B3C605",
+      "nickname": "Phone 02",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23B6C60B",
+      "nickname": "Phone 03",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23BFC680",
+      "nickname": "Phone 04",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23BFC6BD",
+      "nickname": "Phone 05",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23C7C69C",
+      "nickname": "Phone 06",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "7001963A",
+      "nickname": "Phone 07",
+      "role": "hotspot-client",
+      "parentHotspotSerial": ""
+    }
+  ]
 }

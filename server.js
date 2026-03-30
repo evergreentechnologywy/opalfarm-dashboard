@@ -20,6 +20,14 @@ const ACTIVITY_LOG_PATH = path.join(LOG_DIR, "activity.log");
 const IP_CHECK_LOG_PATH = path.join(LOG_DIR, "ip-check.log");
 const PID_PATH = path.join(ROOT, "phonefarm.pid");
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const PHONEFARM_REMOTE_PREFIX = "/phonefarm";
+const AUTH_DISABLED = true;
+const AUTH_BYPASS_USER = {
+  username: "operator",
+  displayName: "Operator",
+  role: "admin",
+  allowedDevices: ["*"]
+};
 
 const DEFAULT_SETTINGS = {
   host: "127.0.0.1",
@@ -102,17 +110,25 @@ setInterval(cleanExpiredSessions, 300000);
 
 const server = http.createServer(async (req, res) => {
   try {
-    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const originalUrl = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const pathname = normalizeRequestPath(originalUrl.pathname);
+    const url = new URL(`${pathname}${originalUrl.search}`, `http://${req.headers.host || "127.0.0.1"}`);
     const cookies = parseCookies(req.headers.cookie || "");
-    const session = getSession(cookies.phonefarm_session);
-    const user = session ? findUser(session.username) : null;
+    const session = AUTH_DISABLED ? null : getSession(cookies.phonefarm_session);
+    const user = AUTH_DISABLED ? AUTH_BYPASS_USER : (session ? findUser(session.username) : null);
 
     if (req.method === "POST" && url.pathname === "/api/login") {
+      if (AUTH_DISABLED) {
+        return sendJson(res, 200, { ok: true, user: sanitizeUser(AUTH_BYPASS_USER) });
+      }
       const body = await readJsonBody(req);
       return handleLogin(res, body);
     }
 
     if (req.method === "POST" && url.pathname === "/api/logout") {
+      if (AUTH_DISABLED) {
+        return sendJson(res, 200, { ok: true, user: sanitizeUser(AUTH_BYPASS_USER) });
+      }
       if (cookies.phonefarm_session) {
         sessions.delete(cookies.phonefarm_session);
       }
@@ -348,7 +364,7 @@ function getDeviceConfig(serial) {
   return (devicesConfig.devices || []).find(device => device.serial === serial) || {
     serial,
     nickname: "",
-    role: "hotspot-client",
+    role: "sim-direct",
     parentHotspotSerial: ""
   };
 }
@@ -395,7 +411,12 @@ function buildStatus(user) {
 }
 
 function sendJson(res, statusCode, data, extraCookies = []) {
-  const headers = { "Content-Type": "application/json; charset=utf-8" };
+  const headers = {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    Pragma: "no-cache",
+    Expires: "0"
+  };
   if (extraCookies.length) {
     headers["Set-Cookie"] = extraCookies;
   }
@@ -412,8 +433,23 @@ function serveStatic(urlPath, res) {
   if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
     return sendJson(res, 404, { error: "Not found" });
   }
-  res.writeHead(200, { "Content-Type": getContentType(filePath) });
+  res.writeHead(200, {
+    "Content-Type": getContentType(filePath),
+    "Cache-Control": "no-store, no-cache, must-revalidate, private",
+    Pragma: "no-cache",
+    Expires: "0"
+  });
   fs.createReadStream(filePath).pipe(res);
+}
+
+function normalizeRequestPath(pathname) {
+  if (pathname === PHONEFARM_REMOTE_PREFIX || pathname === `${PHONEFARM_REMOTE_PREFIX}/`) {
+    return "/";
+  }
+  if (pathname.startsWith(`${PHONEFARM_REMOTE_PREFIX}/`)) {
+    return pathname.slice(PHONEFARM_REMOTE_PREFIX.length);
+  }
+  return pathname;
 }
 
 function getContentType(filePath) {
@@ -458,7 +494,7 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   if (action === "metadata") {
     upsertDeviceConfig(serial, {
       nickname: String(body.nickname || "").trim(),
-      role: String(body.role || "hotspot-client").trim() || "hotspot-client",
+      role: String(body.role || "sim-direct").trim() || "sim-direct",
       parentHotspotSerial: String(body.parentHotspotSerial || "").trim()
     });
     refreshDevices();
@@ -481,6 +517,26 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
       return sendJson(res, 500, { error: result.error || "IP check failed", ipCheck: result.publicIp });
     }
     return sendJson(res, 200, { ok: true, ipCheck: result.publicIp });
+  }
+
+  if (action === "recover-radios") {
+    updateDeviceState(serial, { prepMessage: "Clearing airplane mode and recovering radios" });
+    const child = runPowerShellScript(
+      "recover-device-radios.ps1",
+      ["-Serial", serial, "-SettingsPath", SETTINGS_PATH, "-ActivityLogPath", ACTIVITY_LOG_PATH],
+      { detached: false }
+    );
+
+    child.on("exit", code => {
+      const success = code === 0;
+      updateDeviceState(serial, {
+        prepMessage: success ? "Airplane mode cleared and radios recovered" : "Radio recovery failed; review logs"
+      });
+      logActivity("recover", success ? "Radio recovery completed" : `Radio recovery failed with exit code ${code}`, serial);
+    });
+
+    logActivity("recover", `Radio recovery requested by ${user.username}`, serial);
+    return sendJson(res, 200, { ok: true });
   }
 
   if (action === "start-session") {
@@ -536,7 +592,7 @@ function buildMissingDevice(serial) {
     product: "",
     transportId: "",
     nickname: deviceConfig.nickname || "",
-    role: deviceConfig.role || "hotspot-client",
+    role: deviceConfig.role || "sim-direct",
     parentHotspotSerial: deviceConfig.parentHotspotSerial || "",
     network: state.devices?.[serial]?.network || {
       ipAddress: "",
@@ -586,7 +642,7 @@ function refreshDevices() {
       deviceName: row.deviceName || "",
       transportId: row.transportId || "",
       nickname: metadata.nickname || "",
-      role: metadata.role || "hotspot-client",
+      role: metadata.role || "sim-direct",
       parentHotspotSerial: metadata.parentHotspotSerial || "",
       network,
       publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
@@ -846,8 +902,8 @@ function performDevicePublicIpCheck(serial, reason) {
     cwd: ROOT,
     encoding: "utf8",
     windowsHide: true,
-    timeout: 20000
-  });
+      timeout: 70000
+    });
 
   let helperPayload = null;
   let resolvedIp = "";

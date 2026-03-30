@@ -15,6 +15,7 @@ if (Test-Path $pidPath) {
       Write-Output "PhoneFarm is already running with PID $existingPid"
       exit 0
     }
+    Remove-Item -LiteralPath $pidPath -Force
   }
 }
 

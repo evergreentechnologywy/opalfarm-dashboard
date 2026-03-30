@@ -1,6 +1,11 @@
 const state = {
   data: null,
-  user: null,
+  user: {
+    username: "operator",
+    displayName: "Operator",
+    role: "admin",
+    allowedDevices: ["*"]
+  },
   viewMode: "cards",
   filters: {
     search: "",
@@ -10,11 +15,9 @@ const state = {
     readyOnly: false
   }
 };
+const BASE_PATH = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm" : "";
 
 const appShell = document.getElementById("appShell");
-const loginShell = document.getElementById("loginShell");
-const loginForm = document.getElementById("loginForm");
-const loginError = document.getElementById("loginError");
 const currentUser = document.getElementById("currentUser");
 const logoutButton = document.getElementById("logoutButton");
 const refreshButton = document.getElementById("refreshButton");
@@ -41,8 +44,6 @@ const readyOnlyToggle = document.getElementById("readyOnlyToggle");
 const cardViewButton = document.getElementById("cardViewButton");
 const tableViewButton = document.getElementById("tableViewButton");
 const template = document.getElementById("deviceCardTemplate");
-
-loginForm.addEventListener("submit", handleLogin);
 logoutButton.addEventListener("click", handleLogout);
 refreshButton.addEventListener("click", () => refresh(true));
 searchInput.addEventListener("input", event => {
@@ -68,34 +69,52 @@ readyOnlyToggle.addEventListener("change", event => {
 cardViewButton.addEventListener("click", () => setViewMode("cards"));
 tableViewButton.addEventListener("click", () => setViewMode("table"));
 
+render();
 refresh();
 setInterval(() => {
   if (state.user) {
-    refresh();
+    refresh(false);
   }
 }, 4000);
 
 async function refresh(showToast = false) {
-  const meResponse = await fetch("/api/me");
-  if (meResponse.status === 401) {
-    state.user = null;
-    state.data = null;
+  try {
+    const meResponse = await fetch(apiPath("/api/me"), {
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    if (meResponse.status === 401) {
+      state.user = null;
+      state.data = null;
+      render();
+      return;
+    }
+    if (!meResponse.ok) {
+      throw new Error(`Login session check failed (${meResponse.status})`);
+    }
+
+    const mePayload = await meResponse.json();
+    state.user = mePayload.user;
+
+    const response = await fetch(apiPath("/api/status"), {
+      credentials: "same-origin",
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      throw new Error(`Dashboard refresh failed (${response.status})`);
+    }
+
+    state.data = await response.json();
     render();
-    return;
-  }
 
-  const mePayload = await meResponse.json();
-  state.user = mePayload.user;
-
-  const response = await fetch("/api/status");
-  state.data = await response.json();
-  render();
-
-  if (showToast) {
-    refreshButton.textContent = "Refreshed";
-    setTimeout(() => {
-      refreshButton.textContent = "Refresh";
-    }, 800);
+    if (showToast) {
+      refreshButton.textContent = "Refreshed";
+      setTimeout(() => {
+        refreshButton.textContent = "Refresh";
+      }, 800);
+    }
+  } catch (error) {
+    window.alert(error.message || "Dashboard refresh failed.");
   }
 }
 
@@ -106,48 +125,18 @@ function setViewMode(mode) {
   renderDeviceViews();
 }
 
-async function handleLogin(event) {
-  event.preventDefault();
-  loginError.textContent = "";
-  const formData = new FormData(loginForm);
-  const payload = {
-    username: formData.get("username"),
-    password: formData.get("password")
-  };
-
-  const response = await fetch("/api/login", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-
-  const result = await response.json().catch(() => ({ error: "Login failed" }));
-  if (!response.ok) {
-    loginError.textContent = result.error || "Login failed";
-    return;
-  }
-
-  loginForm.reset();
+async function handleLogout() {
+  await fetch(apiPath("/api/logout"), { method: "POST", credentials: "same-origin", cache: "no-store" });
   await refresh();
 }
 
-async function handleLogout() {
-  await fetch("/api/logout", { method: "POST" });
-  state.user = null;
-  state.data = null;
-  render();
+function apiPath(pathname) {
+  return `${BASE_PATH}${pathname}`;
 }
 
 function render() {
-  if (!state.user) {
-    appShell.hidden = true;
-    loginShell.hidden = false;
-    return;
-  }
-
   appShell.hidden = false;
-  loginShell.hidden = true;
-  currentUser.textContent = `${state.user.displayName} (${state.user.role})`;
+  currentUser.textContent = `${state.user?.displayName || "Operator"} (${state.user?.role || "admin"})`;
 
   const data = state.data || { devices: [], queue: [], recentActivity: [], routingAudit: { checks: [] } };
   const visibleDevices = filterDevices(data.devices || []);
@@ -294,6 +283,7 @@ function renderTableView(devices) {
         <div class="table-actions">
           <button class="table-action" data-action="open-control">Open Control</button>
           <button class="table-action table-action-primary" data-action="prep">Prep Device</button>
+          <button class="table-action" data-action="recover-radios">Clear Airplane</button>
           <button class="table-action" data-action="check-ip">Check IP</button>
           <button class="table-action" data-action="start-session">Start Session</button>
           <button class="table-action" data-action="stop-session">Stop Session</button>
@@ -354,6 +344,7 @@ function renderDeviceCard(device) {
 
   fragment.querySelector(".action-open").addEventListener("click", () => invokeDeviceAction(device.serial, "open-control"));
   fragment.querySelector(".action-prep").addEventListener("click", () => invokeDeviceAction(device.serial, "prep"));
+  fragment.querySelector(".action-recover").addEventListener("click", () => invokeDeviceAction(device.serial, "recover-radios"));
   fragment.querySelector(".action-check-ip").addEventListener("click", () => invokeDeviceAction(device.serial, "check-ip"));
   fragment.querySelector(".action-start").addEventListener("click", () => invokeDeviceAction(device.serial, "start-session"));
   fragment.querySelector(".action-stop").addEventListener("click", () => invokeDeviceAction(device.serial, "stop-session"));
@@ -369,7 +360,7 @@ function filterDevices(devices) {
       (state.filters.status === "online" && device.online) ||
       (state.filters.status === "offline" && !device.online) ||
       device.prepState === state.filters.status;
-    const roleMatch = state.filters.role === "all" || (device.role || "hotspot-client") === state.filters.role;
+    const roleMatch = state.filters.role === "all" || (device.role || "sim-direct") === state.filters.role;
     const warningsMatch = !state.filters.warningsOnly || hasWarning(device);
     const readyMatch = !state.filters.readyOnly || device.prepState === "ready";
     const searchMatch = !state.filters.search || searchTarget.includes(state.filters.search);
@@ -416,9 +407,11 @@ function isOperatorEvent(event) {
 }
 
 async function invokeDeviceAction(serial, action, body = {}) {
-  const response = await fetch(`/api/devices/${encodeURIComponent(serial)}/${action}`, {
+  const response = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/${action}`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
     body: JSON.stringify(body)
   });
 
@@ -432,7 +425,10 @@ async function invokeDeviceAction(serial, action, body = {}) {
 }
 
 function formatRole(role) {
-  return role === "hotspot-provider" ? "Hotspot Provider" : "Hotspot Client";
+  if (role === "hotspot-client") {
+    return "Hotspot Client";
+  }
+  return "SIM Direct";
 }
 
 function formatDateTime(value) {

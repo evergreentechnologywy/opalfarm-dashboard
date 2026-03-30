@@ -162,11 +162,9 @@ The dashboard also shows:
 
 ## Authentication
 
-- The dashboard requires login before any API access.
-- Default admin user: `admin`
-- Default admin password: `Daniel1099#`
-- Passwords are stored as PBKDF2 hashes in `C:\PhoneFarm\config\users.json`.
-- Device visibility and actions are enforced per user by serial.
+- Authentication is currently disabled on this machine for direct operator access.
+- The browser dashboard opens directly without a sign-in step.
+- If login is re-enabled later, credentials and per-device access are stored in `C:\PhoneFarm\config\users.json`.
 
 Create or update a restricted operator:
 
@@ -218,15 +216,23 @@ Behavior:
 Implementation path:
 
 - The check is device-side, not PC-side.
-- `check-device-ip.ps1` calls `adb -s <serial> shell ...` for the selected phone only.
-- It tries on-device HTTP clients such as `curl`, `toybox wget`, and `wget` against public IP endpoints.
-- The HTTP request originates from the phone's own network path when those shell tools are available on the device.
+- `check-device-ip.ps1` now prefers the PhoneFarm helper app on the phone itself.
+- The helper app is launched for the selected serial only and performs the HTTP request on the phone.
+- The result is written locally on the phone and read back over `adb`, so the PC is not acting as the network path or as a proxy.
+- If the helper app is not present, `check-device-ip.ps1` can still fall back to older device-shell methods.
 
 Tradeoffs:
 
 - This is intentionally not a PC-side IP lookup.
-- Some Android builds do not ship usable shell HTTP clients. On those devices, the public IP check shows `failed`.
-- If that happens, the next practical path is a small helper app on-device that can fetch and return the public IP under ADB control.
+- Some phones still fail the check because their own network path is not ready or DNS is failing on-device.
+- Those devices now report a phone-side failure message instead of falling back to a misleading PC-side result.
+
+Helper app files and scripts:
+
+- source: `C:\PhoneFarm\android\phonefarm-ip-helper\`
+- APK output: `C:\PhoneFarm\config\phonefarm-ip-helper.apk`
+- build script: `C:\PhoneFarm\scripts\build-phonefarm-ip-helper.ps1`
+- install script: `C:\PhoneFarm\scripts\install-phonefarm-ip-helper.ps1`
 
 ## Scripts
 
@@ -236,6 +242,8 @@ Tradeoffs:
 - `C:\PhoneFarm\scripts\open-scrcpy-for-device.ps1`
 - `C:\PhoneFarm\scripts\prep-device-session.ps1`
 - `C:\PhoneFarm\scripts\check-device-ip.ps1`
+- `C:\PhoneFarm\scripts\build-phonefarm-ip-helper.ps1`
+- `C:\PhoneFarm\scripts\install-phonefarm-ip-helper.ps1`
 - `C:\PhoneFarm\scripts\healthcheck-phonefarm.ps1`
 - `C:\PhoneFarm\scripts\manage-phonefarm-user.ps1`
 - `C:\PhoneFarm\scripts\audit-phonefarm-routing.ps1`
@@ -303,6 +311,7 @@ Known limitations:
 - Phones must appear in `adb devices -l` before the dashboard can manage them.
 - Airplane mode and hotspot control vary by Android version and OEM ROM.
 - Device-side public IP verification depends on shell HTTP tooling available on the phone.
+- The helper app now provides the primary phone-side public IP path, but a device with broken phone-side DNS or no usable network still reports `failed`.
 - DeviceFarmer/STF is documented as a fallback path, not the active Windows runtime on this host.
 
 Remote access summary:
