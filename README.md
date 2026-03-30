@@ -130,7 +130,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\deploy-phonefarm.ps1
 
 Supported roles:
 
-- `hotspot-provider`
+- `sim-direct`
 - `hotspot-client`
 
 ## Dashboard Features
@@ -139,6 +139,7 @@ Each device card shows:
 
 - serial
 - nickname
+- Gmail account, or `Gmail not assigned`
 - online or offline status
 - role
 - prep state
@@ -183,13 +184,14 @@ When `Prep Device` is pressed, the backend:
 1. Adds the selected serial to the global prep queue.
 2. Waits until it becomes the one active prep job.
 3. Runs `prep-device-session.ps1` for that serial.
-4. Enables airplane mode.
+4. Clears stuck airplane mode through MacroDroid Helper if needed.
 5. Waits a random `25-45` seconds.
-6. Disables airplane mode.
-7. If the device role is `hotspot-provider`, attempts to re-enable hotspot.
-8. If the device role is `hotspot-client`, waits for network recovery without trying to start hotspot.
-9. Runs an automatic public IP verification from the phone's own network path.
-10. Marks the device `ready` or `failed`.
+6. Performs a role-aware radio reset.
+7. If the device role is `sim-direct`, re-enables mobile data and waits for recovery.
+8. If the device role is `hotspot-client`, re-enables Wi-Fi and waits for recovery.
+9. Falls back to reboot-based recovery only if the radio-reset path does not restore network service.
+10. Runs an automatic public IP verification from the phone's own network path.
+11. Marks the device `ready` or `failed`.
 
 Prep states:
 
@@ -218,6 +220,23 @@ Implementation path:
 - The check is device-side, not PC-side.
 - `check-device-ip.ps1` now prefers the PhoneFarm helper app on the phone itself.
 - The helper app is launched for the selected serial only and performs the HTTP request on the phone.
+
+## Gmail Display
+
+PhoneFarm can display the Google account present on each phone without using the PC as a traffic relay.
+
+Behavior:
+
+- The dashboard reads local Android account metadata over ADB only.
+- It checks for the first `com.google` account on the phone.
+- If a Google account is present, the dashboard shows that email address.
+- If no Google account is present, the dashboard shows `Gmail not assigned`.
+
+Traffic model:
+
+- This is a local metadata read from the phone.
+- It does not proxy phone browsing through the PC.
+- It does not use Tailscale as part of the phone's web path.
 - The result is written locally on the phone and read back over `adb`, so the PC is not acting as the network path or as a proxy.
 - If the helper app is not present, `check-device-ip.ps1` can still fall back to older device-shell methods.
 

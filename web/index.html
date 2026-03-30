@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PhoneFarm Dashboard v20260330a</title>
+    <title>PhoneFarm Dashboard v20260330b</title>
     <script>
       (function setPhoneFarmBasePath() {
         const baseHref = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm/" : "/";
@@ -12,14 +12,14 @@
         document.head.appendChild(base);
       })();
     </script>
-    <link rel="stylesheet" href="styles.css?v=20260330a" />
+    <link rel="stylesheet" href="styles.css?v=20260330b" />
   </head>
   <body>
     <div id="appShell" class="shell">
       <header class="hero">
         <div class="hero-copy">
           <p class="eyebrow">Internal Operations Console</p>
-          <h1>PhoneFarm <span class="build-chip">Build 20260330a</span></h1>
+          <h1>PhoneFarm <span class="build-chip">Build 20260330b</span></h1>
           <p class="subtitle">Daily control surface for USB-connected Android phones, prep orchestration, IP verification, and operator access.</p>
         </div>
         <div class="hero-actions">
@@ -97,6 +97,7 @@
                     <th>Status</th>
                     <th>Role</th>
                     <th>Prep</th>
+                    <th>Gmail</th>
                     <th>Public IP</th>
                     <th>Last Checked</th>
                     <th>IP Warning</th>
@@ -176,6 +177,10 @@
 
         <div class="device-meta-grid">
           <div class="meta-cell">
+            <span>Gmail</span>
+            <strong class="gmail-value"></strong>
+          </div>
+          <div class="meta-cell">
             <span>Public IP</span>
             <strong class="public-ip-value"></strong>
           </div>
@@ -202,7 +207,7 @@
         <div class="device-actions">
           <button class="button button-secondary action-open" type="button">Open Control</button>
           <button class="button button-primary action-prep" type="button">Prep Device</button>
-          <button class="button button-secondary action-recover" type="button">Clear Airplane</button>
+          <button class="button button-secondary action-recover" type="button">Recover Radios</button>
           <button class="button button-secondary action-check-ip" type="button">Check IP</button>
           <button class="button button-secondary action-start" type="button">Start Session</button>
           <button class="button button-secondary action-stop" type="button">Stop Session</button>
@@ -210,6 +215,6 @@
       </article>
     </template>
 
-    <script src="app.js?v=20260330a"></script>
+    <script src="app.js?v=20260330b"></script>
   </body>
 </html>

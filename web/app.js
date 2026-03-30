@@ -183,7 +183,7 @@ function renderQueuePanel(data) {
   );
   if (lastCompleteEvent) {
     lastCompletedPrep.textContent = lastCompleteEvent.serial || lastCompleteEvent.message;
-    lastCompletedPrepMeta.textContent = `${lastCompleteEvent.message} • ${formatDateTime(lastCompleteEvent.timestamp)}`;
+    lastCompletedPrepMeta.textContent = `${lastCompleteEvent.message} | ${formatDateTime(lastCompleteEvent.timestamp)}`;
   } else {
     lastCompletedPrep.textContent = "No completed prep yet";
     lastCompletedPrepMeta.textContent = "Waiting for first completion";
@@ -215,7 +215,7 @@ function renderActivityFeed(events) {
   for (const event of visibleEvents) {
     const item = document.createElement("article");
     item.className = "activity-item";
-    const serialLabel = event.serial ? ` • ${escapeHtml(event.serial)}` : "";
+    const serialLabel = event.serial ? ` | ${escapeHtml(event.serial)}` : "";
     item.innerHTML = `<strong>${escapeHtml(event.category.toUpperCase())}${serialLabel}</strong><div>${escapeHtml(event.message)}</div><small>${escapeHtml(formatDateTime(event.timestamp))}</small>`;
     activityList.appendChild(item);
   }
@@ -263,7 +263,7 @@ function renderCardView(devices) {
 function renderTableView(devices) {
   deviceTableBody.innerHTML = "";
   if (!devices.length) {
-    deviceTableBody.innerHTML = `<tr><td colspan="9" class="table-empty">No devices match the current filters.</td></tr>`;
+    deviceTableBody.innerHTML = `<tr><td colspan="10" class="table-empty">No devices match the current filters.</td></tr>`;
     return;
   }
 
@@ -276,14 +276,15 @@ function renderTableView(devices) {
       <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
       <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
       <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}</td>
+      <td>${escapeHtml(formatGmail(device.account))}</td>
       <td>${escapeHtml(device.publicIp?.currentIp || "Not checked")}</td>
-      <td>${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "—")}</td>
+      <td>${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-")}</td>
       <td>${escapeHtml(deviceWarningLabel(device))}</td>
       <td>
         <div class="table-actions">
           <button class="table-action" data-action="open-control">Open Control</button>
           <button class="table-action table-action-primary" data-action="prep">Prep Device</button>
-          <button class="table-action" data-action="recover-radios">Clear Airplane</button>
+          <button class="table-action" data-action="recover-radios">Recover Radios</button>
           <button class="table-action" data-action="check-ip">Check IP</button>
           <button class="table-action" data-action="start-session">Start Session</button>
           <button class="table-action" data-action="stop-session">Stop Session</button>
@@ -311,6 +312,7 @@ function renderDeviceCard(device) {
   const roleBadge = fragment.querySelector(".role-badge");
   const prepBadge = fragment.querySelector(".prep-badge");
   const duplicateBadge = fragment.querySelector(".duplicate-badge");
+  const gmailValue = fragment.querySelector(".gmail-value");
   const publicIpValue = fragment.querySelector(".public-ip-value");
   const lastCheckedValue = fragment.querySelector(".last-checked-value");
   const ipStatusValue = fragment.querySelector(".ip-status-value");
@@ -328,8 +330,9 @@ function renderDeviceCard(device) {
   roleBadge.className = "badge role-badge badge-neutral";
   prepBadge.textContent = (device.prepState || "idle").toUpperCase();
   prepBadge.className = `badge prep-badge ${prepBadgeClass(device.prepState)}`;
+  gmailValue.textContent = formatGmail(device.account);
   publicIpValue.textContent = device.publicIp?.currentIp || "Not checked";
-  lastCheckedValue.textContent = device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "—";
+  lastCheckedValue.textContent = device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-";
   ipStatusValue.textContent = (device.publicIp?.status || "unknown").toUpperCase();
   transportValue.textContent = device.transportId || device.serial;
   changedState.textContent = `Changed since last prep/session: ${device.publicIp?.changedSinceLastPrep ? "Yes" : "No"}`;
@@ -433,6 +436,13 @@ function formatRole(role) {
 
 function formatDateTime(value) {
   return new Date(value).toLocaleString();
+}
+
+function formatGmail(account) {
+  if (account?.gmail) {
+    return account.gmail;
+  }
+  return "Gmail not assigned";
 }
 
 function escapeHtml(value) {

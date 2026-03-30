@@ -76,6 +76,7 @@ let devicesConfig = loadJson(DEVICES_CONFIG_PATH, DEFAULT_DEVICES_CONFIG);
 let preparingSerial = null;
 let deviceCache = {};
 let lastIpRefreshAt = 0;
+let lastAccountRefreshAt = 0;
 let lastRoutingAuditAt = 0;
 let deviceIpHistory = loadJson(DEVICE_IP_HISTORY_PATH, DEFAULT_IP_HISTORY);
 const missingTools = new Set();
@@ -601,8 +602,13 @@ function buildMissingDevice(serial) {
       status: "unknown",
       checkedAt: ""
     },
-    publicIp: existingPublicIp,
-    prepState: state.devices?.[serial]?.prepState || "idle",
+      publicIp: existingPublicIp,
+      account: state.devices?.[serial]?.account || {
+        gmail: "",
+        status: "unknown",
+        checkedAt: ""
+      },
+      prepState: state.devices?.[serial]?.prepState || "idle",
     prepMessage: state.devices?.[serial]?.prepMessage || "",
     sessionState: state.devices?.[serial]?.sessionState || "stopped"
   };
@@ -620,6 +626,7 @@ function refreshDevices() {
   const rows = queryAdbDevices();
   const next = {};
   const shouldRefreshNetwork = Date.now() - lastIpRefreshAt >= (settings.ipRefreshIntervalMs || 15000);
+  const shouldRefreshAccounts = Date.now() - lastAccountRefreshAt >= 30000;
 
   for (const row of rows) {
     const stored = state.devices[row.serial] || {};
@@ -631,6 +638,13 @@ function refreshDevices() {
           interface: "",
           source: "",
           status: row.state === "device" ? "pending" : "offline",
+          checkedAt: ""
+        });
+    const account = shouldRefreshAccounts
+      ? queryDeviceGoogleAccount(row.serial, row.state === "device")
+      : (stored.account || previous[row.serial]?.account || {
+          gmail: "",
+          status: row.state === "device" ? "unknown" : "offline",
           checkedAt: ""
         });
     next[row.serial] = {
@@ -645,6 +659,7 @@ function refreshDevices() {
       role: metadata.role || "sim-direct",
       parentHotspotSerial: metadata.parentHotspotSerial || "",
       network,
+      account,
       publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
       prepState: stored.prepState || "idle",
       prepMessage: stored.prepMessage || "",
@@ -682,6 +697,9 @@ function refreshDevices() {
   deviceCache = next;
   if (shouldRefreshNetwork) {
     lastIpRefreshAt = Date.now();
+  }
+  if (shouldRefreshAccounts) {
+    lastAccountRefreshAt = Date.now();
   }
 }
 
@@ -825,6 +843,48 @@ function queryDeviceNetwork(serial, online) {
     interface: "",
     source: "",
     status: "unresolved",
+    checkedAt
+  };
+}
+
+function queryDeviceGoogleAccount(serial, online) {
+  const checkedAt = new Date().toISOString();
+  if (!online) {
+    return {
+      gmail: "",
+      status: "offline",
+      checkedAt
+    };
+  }
+
+  const result = spawnSync(settings.adbPath || "adb", ["-s", serial, "shell", "dumpsys", "account"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 8000
+  });
+
+  if (result.error || result.status !== 0) {
+    return {
+      gmail: "",
+      status: "unavailable",
+      checkedAt
+    };
+  }
+
+  const output = String(result.stdout || "");
+  const match = output.match(/Account\s+\{name=([^,]+),\s*type=com\.google\}/i);
+  if (match) {
+    return {
+      gmail: match[1].trim(),
+      status: "assigned",
+      checkedAt
+    };
+  }
+
+  return {
+    gmail: "",
+    status: "unassigned",
     checkedAt
   };
 }
