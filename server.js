@@ -364,6 +364,7 @@ function filterRecentActivityForUser(user) {
 function getDeviceConfig(serial) {
   return (devicesConfig.devices || []).find(device => device.serial === serial) || {
     serial,
+    phoneNumber: null,
     nickname: "",
     role: "sim-direct",
     parentHotspotSerial: ""
@@ -386,6 +387,51 @@ function upsertDeviceConfig(serial, patch) {
   devicesConfig.devices = devices;
   saveDevicesConfig();
   return nextRecord;
+}
+
+function getAssignedPhoneNumbers() {
+  const numbers = new Set();
+  for (const device of devicesConfig.devices || []) {
+    const phoneNumber = Number(device.phoneNumber);
+    if (Number.isInteger(phoneNumber) && phoneNumber > 0) {
+      numbers.add(phoneNumber);
+      continue;
+    }
+
+    const nicknameMatch = String(device.nickname || "").match(/^Phone\s+(\d{1,3})$/i);
+    if (nicknameMatch) {
+      numbers.add(Number(nicknameMatch[1]));
+    }
+  }
+  return numbers;
+}
+
+function getNextPhoneNumber() {
+  const assigned = getAssignedPhoneNumbers();
+  let phoneNumber = 1;
+  while (assigned.has(phoneNumber)) {
+    phoneNumber += 1;
+  }
+  return phoneNumber;
+}
+
+function formatPhoneNumber(phoneNumber) {
+  return `Phone ${String(phoneNumber).padStart(2, "0")}`;
+}
+
+function ensureDeviceNumberAssignment(serial) {
+  const existing = getDeviceConfig(serial);
+  const currentNumber = Number(existing.phoneNumber);
+  if (Number.isInteger(currentNumber) && currentNumber > 0) {
+    return existing;
+  }
+
+  const nicknameMatch = String(existing.nickname || "").match(/^Phone\s+(\d{1,3})$/i);
+  const phoneNumber = nicknameMatch ? Number(nicknameMatch[1]) : getNextPhoneNumber();
+  return upsertDeviceConfig(serial, {
+    phoneNumber,
+    nickname: existing.nickname || formatPhoneNumber(phoneNumber)
+  });
 }
 
 function buildStatus(user) {
@@ -617,6 +663,7 @@ function buildMissingDevice(serial) {
     product: "",
     transportId: "",
     nickname: deviceConfig.nickname || "",
+    phoneNumber: deviceConfig.phoneNumber || null,
     role: deviceConfig.role || "sim-direct",
     parentHotspotSerial: deviceConfig.parentHotspotSerial || "",
     network: state.devices?.[serial]?.network || {
@@ -654,7 +701,7 @@ function refreshDevices() {
 
   for (const row of rows) {
     const stored = state.devices[row.serial] || {};
-    const metadata = getDeviceConfig(row.serial);
+    const metadata = ensureDeviceNumberAssignment(row.serial);
     const network = shouldRefreshNetwork
       ? queryDeviceNetwork(row.serial, row.state === "device")
       : (stored.network || previous[row.serial]?.network || {
@@ -680,6 +727,7 @@ function refreshDevices() {
       deviceName: row.deviceName || "",
       transportId: row.transportId || "",
       nickname: metadata.nickname || "",
+      phoneNumber: metadata.phoneNumber || null,
       role: metadata.role || "sim-direct",
       parentHotspotSerial: metadata.parentHotspotSerial || "",
       network,
@@ -1187,17 +1235,40 @@ function loadRoutingAudit() {
   });
 }
 
-function runPowerShellScript(scriptName, scriptArgs, options) {
+function runPowerShellScript(scriptName, scriptArgs = [], options) {
   const scriptPath = path.join(SCRIPTS_DIR, scriptName);
+  const argsDescription = scriptArgs.length ? ` ${scriptArgs.join(" ")}` : "";
+  logActivity("system", `Running PowerShell script ${scriptName}${argsDescription}`);
   const psArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...scriptArgs];
   const child = spawn("powershell.exe", psArgs, {
     cwd: ROOT,
     windowsHide: true,
     detached: Boolean(options?.detached),
-    stdio: "ignore"
+    stdio: ["ignore", "ignore", "pipe"]
   });
+
+  child.on("error", error => {
+    logActivity("system", `PowerShell ${scriptName} failed to start: ${error.message}`);
+  });
+
+  child.on("exit", code => {
+    if (code !== 0) {
+      logActivity("system", `PowerShell ${scriptName} exited with code ${code}`);
+    }
+  });
+
+  if (child.stderr) {
+    child.stderr.on("data", chunk => {
+      const message = chunk.toString().trim();
+      if (message) {
+        logActivity("system", `PowerShell ${scriptName} stderr: ${message}`);
+      }
+    });
+  }
+
   if (options?.detached) {
     child.unref();
   }
+
   return child;
 }

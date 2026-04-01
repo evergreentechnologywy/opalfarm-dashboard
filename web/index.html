@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PhoneFarm Dashboard v20260330c</title>
+    <title>PhoneFarm Dashboard v20260330f</title>
     <script>
       (function setPhoneFarmBasePath() {
         const baseHref = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm/" : "/";
@@ -12,15 +12,23 @@
         document.head.appendChild(base);
       })();
     </script>
-    <link rel="stylesheet" href="styles.css?v=20260330c" />
+    <link rel="stylesheet" href="styles.css?v=20260330f" />
   </head>
   <body>
+    <div class="shell-backdrop" aria-hidden="true">
+      <div class="backdrop-orb backdrop-orb-left"></div>
+      <div class="backdrop-orb backdrop-orb-right"></div>
+      <div class="backdrop-grid"></div>
+    </div>
     <div id="appShell" class="shell">
-      <header class="hero">
+      <header class="hero hero-topbar">
         <div class="hero-copy">
           <p class="eyebrow">Internal Operations Console</p>
-          <h1>PhoneFarm <span class="build-chip">Build 20260330c</span></h1>
-          <p class="subtitle">Daily control surface for USB-connected Android phones, prep orchestration, IP verification, and operator access.</p>
+          <div class="brand-row">
+            <h1>PhoneFarm</h1>
+            <span class="build-chip">Build 20260330f</span>
+          </div>
+          <p class="subtitle">Local device operations for prep, verification, control, and queue management across USB-connected Android phones.</p>
         </div>
         <div class="hero-actions">
           <div class="user-pill" id="currentUser"></div>
@@ -92,10 +100,11 @@
               <table class="device-table">
                 <thead>
                   <tr>
-                    <th>Nickname</th>
+                    <th>Device</th>
                     <th>Serial</th>
                     <th>Status</th>
                     <th>Role</th>
+                    <th>Session</th>
                     <th>Prep</th>
                     <th>Gmail</th>
                     <th>Public IP</th>
@@ -194,6 +203,10 @@
             <strong class="ip-status-value"></strong>
           </div>
           <div class="meta-cell">
+            <span>Session</span>
+            <strong class="session-value"></strong>
+          </div>
+          <div class="meta-cell">
             <span>ADB Serial</span>
             <strong class="transport-value"></strong>
           </div>
@@ -217,6 +230,6 @@
       </article>
     </template>
 
-    <script src="app.js?v=20260330c"></script>
+    <script src="app.js?v=20260330f"></script>
   </body>
 </html>

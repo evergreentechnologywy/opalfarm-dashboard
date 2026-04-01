@@ -4,42 +4,140 @@
       "serial": "6F9B97EE",
       "nickname": "Phone 01",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "phoneNumber": 1
     },
     {
       "serial": "23B3C605",
       "nickname": "Phone 02",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "phoneNumber": 2
     },
     {
       "serial": "23B6C60B",
       "nickname": "Phone 03",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "phoneNumber": 3
     },
     {
       "serial": "23BFC680",
       "nickname": "Phone 04",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "phoneNumber": 4
     },
     {
       "serial": "23BFC6BD",
       "nickname": "Phone 05",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "phoneNumber": 5
     },
     {
       "serial": "23C7C69C",
       "nickname": "Phone 06",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "phoneNumber": 6
     },
     {
       "serial": "7001963A",
       "nickname": "Phone 07",
       "role": "hotspot-client",
+      "parentHotspotSerial": "",
+      "phoneNumber": 7
+    },
+    {
+      "serial": "23AAC64B",
+      "phoneNumber": 8,
+      "nickname": "Phone 08",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23AAC652",
+      "phoneNumber": 9,
+      "nickname": "Phone 09",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23BFC639",
+      "phoneNumber": 10,
+      "nickname": "Phone 10",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23DFC6CA",
+      "phoneNumber": 11,
+      "nickname": "Phone 11",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "A69CAA34",
+      "phoneNumber": 12,
+      "nickname": "Phone 12",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "A6A5AAB9",
+      "phoneNumber": 13,
+      "nickname": "Phone 13",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "AC7BAAD5",
+      "phoneNumber": 14,
+      "nickname": "Phone 14",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "700197EC",
+      "phoneNumber": 15,
+      "nickname": "Phone 15",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "A6D6AA6C",
+      "phoneNumber": 16,
+      "nickname": "Phone 16",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "A69CAA5F",
+      "phoneNumber": 17,
+      "nickname": "Phone 17",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "6F6296C5",
+      "phoneNumber": 18,
+      "nickname": "Phone 18",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23DFC6DE",
+      "phoneNumber": 19,
+      "nickname": "Phone 19",
+      "role": "sim-direct",
+      "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23BAC6D1",
+      "phoneNumber": 20,
+      "nickname": "Phone 20",
+      "role": "sim-direct",
       "parentHotspotSerial": ""
     }
   ]

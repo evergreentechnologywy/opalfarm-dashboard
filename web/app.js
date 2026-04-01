@@ -122,6 +122,7 @@ function setViewMode(mode) {
   state.viewMode = mode;
   cardViewButton.classList.toggle("is-active", mode === "cards");
   tableViewButton.classList.toggle("is-active", mode === "table");
+  appShell.classList.toggle("table-mode", mode === "table");
   renderDeviceViews();
 }
 
@@ -136,6 +137,7 @@ function apiPath(pathname) {
 
 function render() {
   appShell.hidden = false;
+  appShell.classList.toggle("table-mode", state.viewMode === "table");
   currentUser.textContent = `${state.user?.displayName || "Operator"} (${state.user?.role || "admin"})`;
 
   const data = state.data || { devices: [], queue: [], recentActivity: [], routingAudit: { checks: [] } };
@@ -164,12 +166,14 @@ function buildSummaryStats(devices) {
 
 function renderSummaryStats(stats) {
   statsGrid.innerHTML = "";
+  const fragment = document.createDocumentFragment();
   for (const stat of stats) {
     const card = document.createElement("article");
     card.className = `stat-card tone-${stat.tone}`;
     card.innerHTML = `<span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(String(stat.value))}</strong>`;
-    statsGrid.appendChild(card);
+    fragment.appendChild(card);
   }
+  statsGrid.appendChild(fragment);
 }
 
 function renderQueuePanel(data) {
@@ -195,12 +199,14 @@ function renderQueuePanel(data) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   queue.forEach((serial, index) => {
     const item = document.createElement("div");
     item.className = "queue-item";
     item.innerHTML = `<strong>${index + 1}. ${escapeHtml(serial)}</strong><small>Queued for global prep</small>`;
-    queueList.appendChild(item);
+    fragment.appendChild(item);
   });
+  queueList.appendChild(fragment);
 }
 
 function renderActivityFeed(events) {
@@ -212,13 +218,15 @@ function renderActivityFeed(events) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (const event of visibleEvents) {
     const item = document.createElement("article");
     item.className = "activity-item";
     const serialLabel = event.serial ? ` | ${escapeHtml(event.serial)}` : "";
     item.innerHTML = `<strong>${escapeHtml(event.category.toUpperCase())}${serialLabel}</strong><div>${escapeHtml(event.message)}</div><small>${escapeHtml(formatDateTime(event.timestamp))}</small>`;
-    activityList.appendChild(item);
+    fragment.appendChild(item);
   }
+  activityList.appendChild(fragment);
 }
 
 function renderRoutingAudit(audit) {
@@ -233,19 +241,26 @@ function renderRoutingAudit(audit) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (const check of checks) {
     const item = document.createElement("article");
     item.className = "activity-item";
     item.innerHTML = `<strong>${escapeHtml(check.name)}</strong><div>${escapeHtml(check.detail)}</div><small>${check.ok ? "OK" : "Needs review"}</small>`;
-    routingChecks.appendChild(item);
+    fragment.appendChild(item);
   }
+  routingChecks.appendChild(fragment);
 }
 
 function renderDeviceViews(devices = filterDevices((state.data?.devices) || [])) {
   cardView.hidden = state.viewMode !== "cards";
   tableView.hidden = state.viewMode !== "table";
-  renderCardView(devices);
-  renderTableView(devices);
+  if (state.viewMode === "cards") {
+    renderCardView(devices);
+    tableView.hidden = true;
+  } else {
+    renderTableView(devices);
+    cardView.hidden = true;
+  }
 }
 
 function renderCardView(devices) {
@@ -255,26 +270,35 @@ function renderCardView(devices) {
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (const device of devices) {
-    cardView.appendChild(renderDeviceCard(device));
+    fragment.appendChild(renderDeviceCard(device));
   }
+  cardView.appendChild(fragment);
 }
 
 function renderTableView(devices) {
   deviceTableBody.innerHTML = "";
   if (!devices.length) {
-    deviceTableBody.innerHTML = `<tr><td colspan="10" class="table-empty">No devices match the current filters.</td></tr>`;
+    deviceTableBody.innerHTML = `<tr><td colspan="11" class="table-empty">No devices match the current filters.</td></tr>`;
     return;
   }
 
+  const fragment = document.createDocumentFragment();
   for (const device of devices) {
     const row = document.createElement("tr");
     row.className = `table-row prep-${device.prepState || "idle"}`;
     row.innerHTML = `
-      <td>${escapeHtml(device.nickname || "Unassigned")}</td>
+      <td>
+        <div class="table-device-cell">
+          <strong>${escapeHtml(formatDeviceName(device))}</strong>
+          <small>${escapeHtml(device.serial)}</small>
+        </div>
+      </td>
       <td>${escapeHtml(device.serial)}</td>
       <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
       <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
+      <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
       <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}</td>
       <td>${escapeHtml(formatGmail(device.account))}</td>
       <td>${escapeHtml(device.publicIp?.currentIp || "Not checked")}</td>
@@ -300,13 +324,15 @@ function renderTableView(devices) {
       button.addEventListener("click", () => invokeDeviceAction(device.serial, button.dataset.action));
     });
 
-    deviceTableBody.appendChild(row);
+    fragment.appendChild(row);
   }
+  deviceTableBody.appendChild(fragment);
 }
 
 function renderDeviceCard(device) {
   const fragment = template.content.cloneNode(true);
   const root = fragment.querySelector(".device-card");
+  const kicker = fragment.querySelector(".device-kicker");
   const name = fragment.querySelector(".device-name");
   const serial = fragment.querySelector(".device-serial");
   const statusBadge = fragment.querySelector(".status-badge");
@@ -318,13 +344,15 @@ function renderDeviceCard(device) {
   const publicIpValue = fragment.querySelector(".public-ip-value");
   const lastCheckedValue = fragment.querySelector(".last-checked-value");
   const ipStatusValue = fragment.querySelector(".ip-status-value");
+  const sessionValue = fragment.querySelector(".session-value");
   const transportValue = fragment.querySelector(".transport-value");
   const changedState = fragment.querySelector(".state-changed");
   const duplicateState = fragment.querySelector(".state-duplicate");
   const prepMessageState = fragment.querySelector(".state-prep-message");
   const prepButton = fragment.querySelector(".action-prep");
 
-  name.textContent = device.nickname || "Unassigned Device";
+  kicker.textContent = device.phoneNumber ? `Device ${String(device.phoneNumber).padStart(2, "0")}` : "Device";
+  name.textContent = formatDeviceName(device);
   serial.textContent = device.serial;
   statusBadge.textContent = device.online ? "Online" : "Offline";
   statusBadge.className = `badge status-badge ${device.online ? "badge-online" : "badge-offline"}`;
@@ -336,6 +364,7 @@ function renderDeviceCard(device) {
   publicIpValue.textContent = device.publicIp?.currentIp || "Not checked";
   lastCheckedValue.textContent = device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-";
   ipStatusValue.textContent = (device.publicIp?.status || "unknown").toUpperCase();
+  sessionValue.textContent = formatSession(device.sessionState);
   transportValue.textContent = device.transportId || device.serial;
   changedState.textContent = `Changed since last prep/session: ${device.publicIp?.changedSinceLastPrep ? "Yes" : "No"}`;
   duplicateState.textContent = `IP warning: ${deviceWarningLabel(device)}`;
@@ -361,7 +390,7 @@ function renderDeviceCard(device) {
 
 function filterDevices(devices) {
   return devices.filter(device => {
-    const searchTarget = `${device.nickname || ""} ${device.serial}`.toLowerCase();
+    const searchTarget = `${device.nickname || ""} ${device.serial} ${device.phoneNumber || ""} ${formatGmail(device.account)}`.toLowerCase();
     const statusMatch =
       state.filters.status === "all" ||
       (state.filters.status === "online" && device.online) ||
@@ -412,6 +441,11 @@ function prepBadgeClass(prepState) {
   return "badge-idle";
 }
 
+function sessionBadgeClass(sessionState) {
+  if (sessionState === "running") return "badge-online";
+  return "badge-idle";
+}
+
 function isOperatorEvent(event) {
   const text = `${event.category} ${event.message}`.toLowerCase();
   return ["prep started", "prep completed", "prep failed", "scrcpy", "ip-check", "duplicate", "disconnect", "queue"]
@@ -444,6 +478,7 @@ function formatRole(role) {
 }
 
 function formatDateTime(value) {
+  if (!value) return "-";
   return new Date(value).toLocaleString();
 }
 
@@ -452,6 +487,23 @@ function formatGmail(account) {
     return account.gmail;
   }
   return "Gmail not assigned";
+}
+
+function formatSession(sessionState) {
+  if (sessionState === "running") {
+    return "Running";
+  }
+  return "Stopped";
+}
+
+function formatDeviceName(device) {
+  if (device.nickname) {
+    return device.nickname;
+  }
+  if (device.phoneNumber) {
+    return `Phone ${String(device.phoneNumber).padStart(2, "0")}`;
+  }
+  return "Unassigned Device";
 }
 
 function escapeHtml(value) {
