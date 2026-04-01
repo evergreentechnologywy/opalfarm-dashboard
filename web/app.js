@@ -7,6 +7,7 @@ const state = {
     allowedDevices: ["*"]
   },
   viewMode: "cards",
+  pendingActions: {},
   filters: {
     search: "",
     status: "all",
@@ -15,12 +16,15 @@ const state = {
     readyOnly: false
   }
 };
+
 const BASE_PATH = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm" : "";
 
 const appShell = document.getElementById("appShell");
 const currentUser = document.getElementById("currentUser");
 const logoutButton = document.getElementById("logoutButton");
 const refreshButton = document.getElementById("refreshButton");
+const routeGuardBadge = document.getElementById("routeGuardBadge");
+const liveClock = document.getElementById("liveClock");
 const statsGrid = document.getElementById("statsGrid");
 const deviceCount = document.getElementById("deviceCount");
 const cardView = document.getElementById("cardView");
@@ -35,6 +39,7 @@ const queueList = document.getElementById("queueList");
 const activityList = document.getElementById("activityList");
 const routingStatusBadge = document.getElementById("routingStatusBadge");
 const routingSummary = document.getElementById("routingSummary");
+const routingPaths = document.getElementById("routingPaths");
 const routingChecks = document.getElementById("routingChecks");
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
@@ -44,6 +49,7 @@ const readyOnlyToggle = document.getElementById("readyOnlyToggle");
 const cardViewButton = document.getElementById("cardViewButton");
 const tableViewButton = document.getElementById("tableViewButton");
 const template = document.getElementById("deviceCardTemplate");
+
 logoutButton.addEventListener("click", handleLogout);
 refreshButton.addEventListener("click", () => refresh(true));
 searchInput.addEventListener("input", event => {
@@ -71,11 +77,20 @@ tableViewButton.addEventListener("click", () => setViewMode("table"));
 
 render();
 refresh();
+
 setInterval(() => {
   if (state.user) {
     refresh(false);
   }
 }, 4000);
+
+setInterval(() => {
+  if (state.data) {
+    render();
+  } else {
+    liveClock.textContent = formatNow();
+  }
+}, 1000);
 
 async function refresh(showToast = false) {
   try {
@@ -139,28 +154,61 @@ function render() {
   appShell.hidden = false;
   appShell.classList.toggle("table-mode", state.viewMode === "table");
   currentUser.textContent = `${state.user?.displayName || "Operator"} (${state.user?.role || "admin"})`;
+  liveClock.textContent = formatNow();
 
-  const data = state.data || { devices: [], queue: [], recentActivity: [], routingAudit: { checks: [] } };
+  const data = state.data || buildEmptyData();
   const visibleDevices = filterDevices(data.devices || []);
 
+  syncControls();
+  renderHeroGuard(data.routingGuard || {});
   renderSummaryStats(buildSummaryStats(data.devices || []));
   renderQueuePanel(data);
   renderActivityFeed(data.recentActivity || []);
-  renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] });
+  renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] }, data.routingGuard || {});
 
   deviceCount.textContent = `${visibleDevices.length} visible device${visibleDevices.length === 1 ? "" : "s"}`;
   renderDeviceViews(visibleDevices);
 }
 
+function buildEmptyData() {
+  return {
+    devices: [],
+    queue: [],
+    recentActivity: [],
+    routingAudit: { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] },
+    routingGuard: { blocked: false, reasons: [] },
+    prepTelemetry: { active: null, lastCompleted: null }
+  };
+}
+
+function syncControls() {
+  searchInput.value = state.filters.search ? state.filters.search : searchInput.value;
+  statusFilter.value = state.filters.status;
+  roleFilter.value = state.filters.role;
+  warningsOnlyToggle.checked = state.filters.warningsOnly;
+  readyOnlyToggle.checked = state.filters.readyOnly;
+}
+
+function renderHeroGuard(routingGuard) {
+  const blocked = Boolean(routingGuard?.blocked);
+  routeGuardBadge.textContent = blocked ? "Prep Guard Blocked" : "Prep Guard Clear";
+  routeGuardBadge.className = `badge ${blocked ? "badge-failed" : "badge-ready"}`;
+}
+
 function buildSummaryStats(devices) {
   return [
-    { label: "Total Devices", value: devices.length, tone: "neutral" },
-    { label: "Online", value: devices.filter(device => device.online).length, tone: "success" },
-    { label: "Queued", value: devices.filter(device => device.prepState === "queued").length, tone: "warning" },
-    { label: "Preparing", value: devices.filter(device => device.prepState === "preparing").length, tone: "info" },
-    { label: "Ready", value: devices.filter(device => device.prepState === "ready").length, tone: "success" },
-    { label: "Failed", value: devices.filter(device => device.prepState === "failed").length, tone: "danger" },
-    { label: "Duplicate IP", value: devices.filter(device => isDuplicate(device)).length, tone: devices.some(device => isDuplicate(device)) ? "danger" : "neutral" }
+    { label: "Total Devices", value: devices.length, tone: "neutral", onClick: () => clearQuickFilters() },
+    { label: "Online", value: devices.filter(device => device.online).length, tone: "success", onClick: () => applyQuickFilter({ status: "online" }) },
+    { label: "Queued", value: devices.filter(device => device.prepState === "queued").length, tone: "warning", onClick: () => applyQuickFilter({ status: "queued" }) },
+    { label: "Preparing", value: devices.filter(device => device.prepState === "preparing").length, tone: "info", onClick: () => applyQuickFilter({ status: "preparing" }) },
+    { label: "Ready", value: devices.filter(device => device.prepState === "ready").length, tone: "success", onClick: () => applyQuickFilter({ status: "ready", readyOnly: true }) },
+    { label: "Failed", value: devices.filter(device => device.prepState === "failed").length, tone: "danger", onClick: () => applyQuickFilter({ status: "failed" }) },
+    {
+      label: "Duplicate IP",
+      value: devices.filter(device => isDuplicate(device)).length,
+      tone: devices.some(device => isDuplicate(device)) ? "danger" : "neutral",
+      onClick: () => applyQuickFilter({ warningsOnly: true })
+    }
   ];
 }
 
@@ -168,26 +216,51 @@ function renderSummaryStats(stats) {
   statsGrid.innerHTML = "";
   const fragment = document.createDocumentFragment();
   for (const stat of stats) {
-    const card = document.createElement("article");
-    card.className = `stat-card tone-${stat.tone}`;
-    card.innerHTML = `<span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(String(stat.value))}</strong>`;
-    fragment.appendChild(card);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `stat-card tone-${stat.tone}`;
+    button.innerHTML = `<span>${escapeHtml(stat.label)}</span><strong>${escapeHtml(String(stat.value))}</strong>`;
+    button.addEventListener("click", stat.onClick);
+    fragment.appendChild(button);
   }
   statsGrid.appendChild(fragment);
 }
 
+function applyQuickFilter(patch) {
+  state.filters = {
+    ...state.filters,
+    ...patch
+  };
+  render();
+}
+
+function clearQuickFilters() {
+  state.filters = {
+    search: "",
+    status: "all",
+    role: "all",
+    warningsOnly: false,
+    readyOnly: false
+  };
+  render();
+}
+
 function renderQueuePanel(data) {
   const queue = data.queue || [];
+  const prepTelemetry = data.prepTelemetry || {};
   queueLengthBadge.textContent = `${queue.length} queued`;
-  activePrepDevice.textContent = data.preparingSerial || "Idle";
-  activePrepCountdown.textContent = data.preparingSerial ? "Countdown not exposed by backend" : "No active countdown";
 
-  const lastCompleteEvent = (data.recentActivity || []).find(event =>
-    event.category === "queue" && /Prep completed|Prep failed/.test(event.message)
-  );
-  if (lastCompleteEvent) {
-    lastCompletedPrep.textContent = lastCompleteEvent.serial || lastCompleteEvent.message;
-    lastCompletedPrepMeta.textContent = `${lastCompleteEvent.message} | ${formatDateTime(lastCompleteEvent.timestamp)}`;
+  if (prepTelemetry.active) {
+    activePrepDevice.textContent = prepTelemetry.active.label || prepTelemetry.active.serial;
+    activePrepCountdown.textContent = `Elapsed ${formatDuration(prepTelemetry.active.elapsedMs)} | Started ${formatShortTime(prepTelemetry.active.startedAt)}`;
+  } else {
+    activePrepDevice.textContent = "Idle";
+    activePrepCountdown.textContent = "No active prep worker";
+  }
+
+  if (prepTelemetry.lastCompleted) {
+    lastCompletedPrep.textContent = prepTelemetry.lastCompleted.label || prepTelemetry.lastCompleted.serial;
+    lastCompletedPrepMeta.textContent = `${prepTelemetry.lastCompleted.prepState.toUpperCase()} in ${formatDuration(prepTelemetry.lastCompleted.durationMs)} | ${formatDateTime(prepTelemetry.lastCompleted.finishedAt)}`;
   } else {
     lastCompletedPrep.textContent = "No completed prep yet";
     lastCompletedPrepMeta.textContent = "Waiting for first completion";
@@ -199,11 +272,15 @@ function renderQueuePanel(data) {
     return;
   }
 
+  const devicesBySerial = new Map((data.devices || []).map(device => [device.serial, device]));
   const fragment = document.createDocumentFragment();
   queue.forEach((serial, index) => {
+    const device = devicesBySerial.get(serial);
     const item = document.createElement("div");
     item.className = "queue-item";
-    item.innerHTML = `<strong>${index + 1}. ${escapeHtml(serial)}</strong><small>Queued for global prep</small>`;
+    const label = device ? formatDeviceName(device) : serial;
+    const waitMs = device?.queueWaitMs || 0;
+    item.innerHTML = `<strong>${index + 1}. ${escapeHtml(label)}</strong><small>${escapeHtml(serial)} | Waiting ${escapeHtml(formatDuration(waitMs))}</small>`;
     fragment.appendChild(item);
   });
   queueList.appendChild(fragment);
@@ -229,10 +306,32 @@ function renderActivityFeed(events) {
   activityList.appendChild(fragment);
 }
 
-function renderRoutingAudit(audit) {
+function renderRoutingAudit(audit, routingGuard) {
   routingSummary.textContent = audit.summary || "Routing audit has not completed yet.";
-  routingStatusBadge.textContent = audit.overallOk ? "Separated" : "Review Needed";
-  routingStatusBadge.className = `badge ${audit.overallOk ? "badge-ready" : "badge-failed"}`;
+  routingStatusBadge.textContent = routingGuard.blocked ? "Blocked" : (audit.overallOk ? "Separated" : "Review Needed");
+  routingStatusBadge.className = `badge ${routingGuard.blocked ? "badge-failed" : (audit.overallOk ? "badge-ready" : "badge-queued")}`;
+
+  routingPaths.innerHTML = "";
+  const pathFragment = document.createDocumentFragment();
+  for (const line of [
+    routingGuard.dashboardAccessPath ? `Dashboard path: ${routingGuard.dashboardAccessPath}` : "",
+    routingGuard.deviceTrafficPath ? `Device path: ${routingGuard.deviceTrafficPath}` : "",
+    routingGuard.pcPublicIp ? `PC public IP: ${routingGuard.pcPublicIp}` : ""
+  ].filter(Boolean)) {
+    const chip = document.createElement("div");
+    chip.className = "route-chip";
+    chip.textContent = line;
+    pathFragment.appendChild(chip);
+  }
+  if (routingGuard.blocked && routingGuard.reasons?.length) {
+    for (const reason of routingGuard.reasons) {
+      const chip = document.createElement("div");
+      chip.className = "route-chip route-chip-danger";
+      chip.textContent = reason;
+      pathFragment.appendChild(chip);
+    }
+  }
+  routingPaths.appendChild(pathFragment);
 
   routingChecks.innerHTML = "";
   const checks = audit.checks || [];
@@ -299,26 +398,26 @@ function renderTableView(devices) {
       <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
       <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
       <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
-      <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}</td>
+      <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}<div class="table-subline">${escapeHtml(formatPrepTimer(device))}</div><div class="table-subline">${escapeHtml(formatViewerLaunch(device.viewerLaunch))}</div></td>
       <td>${escapeHtml(formatGmail(device.account))}</td>
       <td>${escapeHtml(device.publicIp?.currentIp || "Not checked")}</td>
       <td>${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-")}</td>
-      <td>${escapeHtml(deviceWarningLabel(device))}</td>
+      <td>${escapeHtml(isReused(device) ? "BIG WARNING: Reused in last 50" : (device.routingRisk?.label || deviceWarningLabel(device)))}</td>
       <td>
         <div class="table-actions">
-          <button class="table-action" data-action="open-control">Open Control</button>
-          <button class="table-action table-action-primary" data-action="prep">Prep Device</button>
-          <button class="table-action" data-action="engage-airplane">Engage Airplane</button>
-          <button class="table-action" data-action="recover-radios">Recover Radios</button>
-          <button class="table-action" data-action="check-ip">Check IP</button>
-          <button class="table-action" data-action="start-session">Start Session</button>
-          <button class="table-action" data-action="stop-session">Stop Session</button>
+          ${renderTableActionButton(device, "open-control", "Open Control")}
+          ${renderTableActionButton(device, "prep", "Prep Device", true)}
+          ${renderTableActionButton(device, "engage-airplane", "Engage Airplane")}
+          ${renderTableActionButton(device, "recover-radios", "Recover Radios")}
+          ${renderTableActionButton(device, "check-ip", "Check IP")}
+          ${renderTableActionButton(device, "start-session", "Start Session")}
+          ${renderTableActionButton(device, "stop-session", "Stop Session")}
         </div>
       </td>
     `;
 
     row.querySelectorAll("[data-action]").forEach(button => {
-      if (button.dataset.action === "prep" && isPrepBlocked(device)) {
+      if (shouldDisableAction(device, button.dataset.action)) {
         button.disabled = true;
       }
       button.addEventListener("click", () => invokeDeviceAction(device.serial, button.dataset.action));
@@ -327,6 +426,12 @@ function renderTableView(devices) {
     fragment.appendChild(row);
   }
   deviceTableBody.appendChild(fragment);
+}
+
+function renderTableActionButton(device, action, label, primary = false) {
+  const busy = isActionPending(device.serial, action);
+  const disabled = shouldDisableAction(device, action);
+  return `<button class="table-action${primary ? " table-action-primary" : ""}" data-action="${escapeHtml(action)}"${disabled ? " disabled" : ""}>${escapeHtml(busy ? "Working..." : label)}</button>`;
 }
 
 function renderDeviceCard(device) {
@@ -344,12 +449,19 @@ function renderDeviceCard(device) {
   const publicIpValue = fragment.querySelector(".public-ip-value");
   const lastCheckedValue = fragment.querySelector(".last-checked-value");
   const ipStatusValue = fragment.querySelector(".ip-status-value");
+  const routeRiskValue = fragment.querySelector(".route-risk-value");
   const sessionValue = fragment.querySelector(".session-value");
+  const prepTimerValue = fragment.querySelector(".prep-timer-value");
+  const lastPrepValue = fragment.querySelector(".last-prep-value");
+  const viewerLaunchValue = fragment.querySelector(".viewer-launch-value");
   const transportValue = fragment.querySelector(".transport-value");
   const changedState = fragment.querySelector(".state-changed");
   const duplicateState = fragment.querySelector(".state-duplicate");
+  const ipHistoryState = fragment.querySelector(".state-ip-history");
+  const viewerLaunchState = fragment.querySelector(".state-viewer-launch");
   const prepMessageState = fragment.querySelector(".state-prep-message");
-  const prepButton = fragment.querySelector(".action-prep");
+  const historyList = fragment.querySelector(".history-list");
+  const historyDrawer = fragment.querySelector(".history-drawer");
 
   kicker.textContent = device.phoneNumber ? `Device ${String(device.phoneNumber).padStart(2, "0")}` : "Device";
   name.textContent = formatDeviceName(device);
@@ -364,33 +476,50 @@ function renderDeviceCard(device) {
   publicIpValue.textContent = device.publicIp?.currentIp || "Not checked";
   lastCheckedValue.textContent = device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-";
   ipStatusValue.textContent = (device.publicIp?.status || "unknown").toUpperCase();
+  routeRiskValue.textContent = device.routingRisk?.label || "Unknown";
   sessionValue.textContent = formatSession(device.sessionState);
+  prepTimerValue.textContent = formatPrepTimer(device);
+  lastPrepValue.textContent = device.lastPrepDurationMs ? formatDuration(device.lastPrepDurationMs) : "No recorded prep";
+  viewerLaunchValue.textContent = formatViewerLaunch(device.viewerLaunch);
   transportValue.textContent = device.transportId || device.serial;
   changedState.textContent = `Changed since last prep/session: ${device.publicIp?.changedSinceLastPrep ? "Yes" : "No"}`;
-  duplicateState.textContent = `IP warning: ${deviceWarningLabel(device)}`;
+  duplicateState.textContent = buildReuseWarning(device);
+  duplicateState.classList.toggle("state-pill-danger", Boolean(device.publicIp?.reusedRecently));
+  ipHistoryState.textContent = buildIpHistorySummary(device);
+  viewerLaunchState.textContent = buildViewerLaunchDetails(device.viewerLaunch);
+  viewerLaunchState.classList.toggle("state-pill-danger", device.viewerLaunch?.status === "failed");
   prepMessageState.textContent = device.prepMessage || "No prep message";
   duplicateBadge.hidden = !isDuplicate(device);
   reuseBadge.hidden = !isReused(device);
+  historyDrawer.open = Boolean(device.publicIp?.reusedRecently);
+  historyList.innerHTML = renderIpHistoryMarkup(device.publicIp?.last50History || []);
 
   root.classList.add(`prep-${device.prepState || "idle"}`);
+  root.classList.add(`risk-${device.routingRisk?.level || "neutral"}`);
   if (device.prepState === "preparing") root.classList.add("is-preparing");
   if (device.prepState === "failed") root.classList.add("is-failed");
-  prepButton.disabled = isPrepBlocked(device);
 
-  fragment.querySelector(".action-open").addEventListener("click", () => invokeDeviceAction(device.serial, "open-control"));
-  fragment.querySelector(".action-prep").addEventListener("click", () => invokeDeviceAction(device.serial, "prep"));
-  fragment.querySelector(".action-airplane").addEventListener("click", () => invokeDeviceAction(device.serial, "engage-airplane"));
-  fragment.querySelector(".action-recover").addEventListener("click", () => invokeDeviceAction(device.serial, "recover-radios"));
-  fragment.querySelector(".action-check-ip").addEventListener("click", () => invokeDeviceAction(device.serial, "check-ip"));
-  fragment.querySelector(".action-start").addEventListener("click", () => invokeDeviceAction(device.serial, "start-session"));
-  fragment.querySelector(".action-stop").addEventListener("click", () => invokeDeviceAction(device.serial, "stop-session"));
+  bindCardAction(fragment.querySelector(".action-open"), device, "open-control", "Open Control");
+  bindCardAction(fragment.querySelector(".action-prep"), device, "prep", "Prep Device");
+  bindCardAction(fragment.querySelector(".action-airplane"), device, "engage-airplane", "Engage Airplane");
+  bindCardAction(fragment.querySelector(".action-recover"), device, "recover-radios", "Recover Radios");
+  bindCardAction(fragment.querySelector(".action-check-ip"), device, "check-ip", "Check IP");
+  bindCardAction(fragment.querySelector(".action-start"), device, "start-session", "Start Session");
+  bindCardAction(fragment.querySelector(".action-stop"), device, "stop-session", "Stop Session");
 
   return fragment;
 }
 
+function bindCardAction(button, device, action, label) {
+  const busy = isActionPending(device.serial, action);
+  button.disabled = shouldDisableAction(device, action);
+  button.textContent = busy ? "Working..." : label;
+  button.addEventListener("click", () => invokeDeviceAction(device.serial, action));
+}
+
 function filterDevices(devices) {
   return devices.filter(device => {
-    const searchTarget = `${device.nickname || ""} ${device.serial} ${device.phoneNumber || ""} ${formatGmail(device.account)}`.toLowerCase();
+    const searchTarget = `${device.nickname || ""} ${device.serial} ${device.phoneNumber || ""} ${formatGmail(device.account)} ${device.publicIp?.currentIp || ""}`.toLowerCase();
     const statusMatch =
       state.filters.status === "all" ||
       (state.filters.status === "online" && device.online) ||
@@ -405,7 +534,12 @@ function filterDevices(devices) {
 }
 
 function hasWarning(device) {
-  return isDuplicate(device) || isReused(device) || device.prepState === "failed" || device.publicIp?.status === "failed" || device.publicIp?.status === "changed";
+  return isDuplicate(device) ||
+    isReused(device) ||
+    device.prepState === "failed" ||
+    device.publicIp?.status === "failed" ||
+    device.publicIp?.status === "changed" ||
+    ["critical", "warning"].includes(device.routingRisk?.level);
 }
 
 function isDuplicate(device) {
@@ -416,8 +550,32 @@ function isReused(device) {
   return Boolean(device.publicIp?.reusedRecently);
 }
 
-function isPrepBlocked(device) {
-  return device.prepState === "queued" || device.prepState === "preparing";
+function buildReuseWarning(device) {
+  if (device.publicIp?.reusedRecently) {
+    const count = device.publicIp?.reusedWithinLast50?.length || 0;
+    return `BIG WARNING: this IP appeared ${count} time${count === 1 ? "" : "s"} in the last 50 successful checks.`;
+  }
+  return `Route risk: ${device.routingRisk?.detail || deviceWarningLabel(device)}`;
+}
+
+function buildIpHistorySummary(device) {
+  const entries = device.publicIp?.last50History || [];
+  if (!entries.length) {
+    return "Last 50 IP checks: no successful history yet.";
+  }
+  const uniqueIps = new Set(entries.map(entry => entry.ip).filter(Boolean));
+  return `Last 50 successful checks: ${entries.length} entries across ${uniqueIps.size} unique IPs.`;
+}
+
+function renderIpHistoryMarkup(entries) {
+  if (!entries.length) {
+    return `<div class="history-empty">No successful IP history yet.</div>`;
+  }
+
+  return entries.map(entry => {
+    const label = `${entry.ip || "Unknown IP"} | ${entry.serial || "-"} | ${entry.reason || "manual"} | ${formatDateTime(entry.timestamp)}`;
+    return `<div class="history-entry">${escapeHtml(label)}</div>`;
+  }).join("");
 }
 
 function deviceWarningLabel(device) {
@@ -427,6 +585,21 @@ function deviceWarningLabel(device) {
   if (device.prepState === "failed") return "Prep Failed";
   if (device.publicIp?.status === "failed") return "IP Check Failed";
   return "None";
+}
+
+function shouldDisableAction(device, action) {
+  if (isActionPending(device.serial, action)) return true;
+  if (action === "prep") {
+    return device.prepState === "queued" || device.prepState === "preparing" || Boolean(state.data?.routingGuard?.blocked);
+  }
+  if (action === "start-session") {
+    return Boolean(state.data?.routingGuard?.blocked);
+  }
+  return false;
+}
+
+function isActionPending(serial, action) {
+  return Boolean(state.pendingActions[`${serial}:${action}`]);
 }
 
 function renderBadgeMarkup(label, className) {
@@ -448,26 +621,36 @@ function sessionBadgeClass(sessionState) {
 
 function isOperatorEvent(event) {
   const text = `${event.category} ${event.message}`.toLowerCase();
-  return ["prep started", "prep completed", "prep failed", "scrcpy", "ip-check", "duplicate", "disconnect", "queue"]
+  return ["prep", "scrcpy", "ip-check", "duplicate", "disconnect", "queue", "session", "recover", "airplane", "routing"]
     .some(keyword => text.includes(keyword));
 }
 
 async function invokeDeviceAction(serial, action, body = {}) {
-  const response = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/${action}`), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    cache: "no-store",
-    body: JSON.stringify(body)
-  });
+  const pendingKey = `${serial}:${action}`;
+  state.pendingActions[pendingKey] = true;
+  render();
 
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: "Action failed" }));
-    window.alert(error.error || "Action failed");
-    return;
+  try {
+    const response = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/${action}`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Action failed" }));
+      throw new Error(error.error || "Action failed");
+    }
+
+    await refresh();
+  } catch (error) {
+    window.alert(error.message || "Action failed");
+  } finally {
+    delete state.pendingActions[pendingKey];
+    render();
   }
-
-  await refresh();
 }
 
 function formatRole(role) {
@@ -482,6 +665,15 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString();
 }
 
+function formatShortTime(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
+function formatNow() {
+  return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit", second: "2-digit" });
+}
+
 function formatGmail(account) {
   if (account?.gmail) {
     return account.gmail;
@@ -490,10 +682,7 @@ function formatGmail(account) {
 }
 
 function formatSession(sessionState) {
-  if (sessionState === "running") {
-    return "Running";
-  }
-  return "Stopped";
+  return sessionState === "running" ? "Running" : "Stopped";
 }
 
 function formatDeviceName(device) {
@@ -504,6 +693,62 @@ function formatDeviceName(device) {
     return `Phone ${String(device.phoneNumber).padStart(2, "0")}`;
   }
   return "Unassigned Device";
+}
+
+function formatPrepTimer(device) {
+  if (device.prepState === "preparing") {
+    return `Live ${formatDuration(device.prepElapsedMs || 0)}`;
+  }
+  if (device.prepState === "queued") {
+    return `Waiting ${formatDuration(device.queueWaitMs || 0)}`;
+  }
+  if (device.lastPrepDurationMs) {
+    return `Last ${formatDuration(device.lastPrepDurationMs)}`;
+  }
+  return "Not started";
+}
+
+function formatViewerLaunch(viewerLaunch) {
+  const status = viewerLaunch?.status || "unknown";
+  if (status === "confirmed") {
+    return `Confirmed${viewerLaunch?.pid ? ` PID ${viewerLaunch.pid}` : ""}`;
+  }
+  if (status === "launching") {
+    return "Launching";
+  }
+  if (status === "unverified") {
+    return `Unverified${viewerLaunch?.pid ? ` PID ${viewerLaunch.pid}` : ""}`;
+  }
+  if (status === "failed") {
+    return "Failed";
+  }
+  return "Unknown";
+}
+
+function buildViewerLaunchDetails(viewerLaunch) {
+  const status = viewerLaunch?.status || "unknown";
+  if (status === "confirmed" || status === "unverified") {
+    const pidText = viewerLaunch?.pid ? `PID ${viewerLaunch.pid}` : "PID unknown";
+    return `Viewer launch ${status}. ${pidText}${viewerLaunch?.filePath ? ` | ${viewerLaunch.filePath}` : ""}`;
+  }
+  if (status === "launching") {
+    return `Viewer launch in progress since ${formatShortTime(viewerLaunch?.requestedAt)}`;
+  }
+  if (status === "failed") {
+    return `Viewer launch failed: ${viewerLaunch?.lastError || "Unknown error"}`;
+  }
+  return "Viewer launch has not been tested yet.";
+}
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.max(0, Math.round((durationMs || 0) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function escapeHtml(value) {

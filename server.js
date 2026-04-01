@@ -435,7 +435,9 @@ function ensureDeviceNumberAssignment(serial) {
 }
 
 function buildStatus(user) {
-  const visibleDevices = applyDuplicateFlags(filterDevicesForUser(user));
+  const routingAudit = loadRoutingAudit();
+  const routingGuard = buildRoutingGuard(routingAudit);
+  const visibleDevices = applyDuplicateFlags(filterDevicesForUser(user)).map(device => enrichDeviceForStatus(device, routingAudit));
   const visibleSerials = new Set(visibleDevices.map(device => device.serial));
   const visibleQueue = (state.queue || []).filter(serial => visibleSerials.has(serial));
   const visiblePreparing = preparingSerial && visibleSerials.has(preparingSerial) ? preparingSerial : null;
@@ -451,7 +453,9 @@ function buildStatus(user) {
     },
     queue: visibleQueue,
     preparingSerial: visiblePreparing,
-    routingAudit: loadRoutingAudit(),
+    prepTelemetry: buildPrepTelemetry(visibleDevices),
+    routingAudit,
+    routingGuard,
     devices: visibleDevices,
     recentActivity: filterRecentActivityForUser(user)
   };
@@ -538,6 +542,7 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   }
 
   const knownDevice = deviceCache[serial] || buildMissingDevice(serial);
+  const routingGuard = buildRoutingGuard(loadRoutingAudit());
   if (action === "metadata") {
     upsertDeviceConfig(serial, {
       nickname: String(body.nickname || "").trim(),
@@ -550,8 +555,7 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   }
 
   if (action === "open-control") {
-    runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: true });
-    logActivity("scrcpy", `Open Control requested by ${user.username}`, serial);
+    launchViewerForDevice(serial, user.username, "open-control");
     return sendJson(res, 200, { ok: true });
   }
 
@@ -607,11 +611,14 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   }
 
   if (action === "start-session") {
+    if (routingGuard.blocked) {
+      return sendJson(res, 409, { error: `Session start blocked: ${routingGuard.reasons.join(" | ")}`, routingGuard });
+    }
     const verification = await runDevicePublicIpCheck(serial, "pre-session");
     if (!verification.success) {
       return sendJson(res, 409, { error: verification.error || "IP verification failed; session not started" });
     }
-    runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: true });
+    launchViewerForDevice(serial, user.username, "start-session");
     updateDeviceState(serial, { sessionState: "running", sessionStartedAt: new Date().toISOString() });
     logActivity("session", `Session started by ${user.username} and scrcpy launched`, serial);
     return sendJson(res, 200, { ok: true });
@@ -628,11 +635,18 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     if (!knownDevice.serial) {
       return sendJson(res, 404, { error: "Unknown device serial" });
     }
+    if (routingGuard.blocked) {
+      return sendJson(res, 409, { error: `Prep blocked: ${routingGuard.reasons.join(" | ")}`, routingGuard });
+    }
     if ((state.queue || []).includes(serial) || preparingSerial === serial) {
       return sendJson(res, 409, { error: "Device already queued or preparing" });
     }
     state.queue = [...(state.queue || []), serial];
-    updateDeviceState(serial, { prepState: "queued", prepMessage: "Queued for prep" });
+    updateDeviceState(serial, {
+      prepState: "queued",
+      prepMessage: "Queued for prep",
+      prepEnqueuedAt: new Date().toISOString()
+    });
     logActivity("queue", `Device added to prep queue by ${user.username}`, serial);
     processPrepQueue();
     return sendJson(res, 200, { ok: true });
@@ -650,7 +664,8 @@ function buildMissingDevice(serial) {
     changedSinceLastPrep: false,
     duplicateWith: [],
     reusedRecently: false,
-    reusedWithinLast22: [],
+    reusedWithinLast50: [],
+    last50History: [],
     lastError: "",
     lastReason: ""
   };
@@ -680,8 +695,23 @@ function buildMissingDevice(serial) {
         checkedAt: ""
       },
       prepState: state.devices?.[serial]?.prepState || "idle",
+    prepEnqueuedAt: state.devices?.[serial]?.prepEnqueuedAt || "",
+    prepStartedAt: state.devices?.[serial]?.prepStartedAt || "",
+    prepFinishedAt: state.devices?.[serial]?.prepFinishedAt || "",
+    lastPrepDurationMs: state.devices?.[serial]?.lastPrepDurationMs || 0,
     prepMessage: state.devices?.[serial]?.prepMessage || "",
-    sessionState: state.devices?.[serial]?.sessionState || "stopped"
+    sessionState: state.devices?.[serial]?.sessionState || "stopped",
+    viewerLaunch: state.devices?.[serial]?.viewerLaunch || {
+      status: "unknown",
+      sourceAction: "",
+      requestedAt: "",
+      confirmedAt: "",
+      pid: null,
+      processName: "",
+      filePath: "",
+      aliveAfterLaunch: false,
+      lastError: ""
+    }
   };
 }
 
@@ -734,10 +764,15 @@ function refreshDevices() {
       account,
       publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
       prepState: stored.prepState || "idle",
+      prepEnqueuedAt: stored.prepEnqueuedAt || "",
+      prepStartedAt: stored.prepStartedAt || "",
+      prepFinishedAt: stored.prepFinishedAt || "",
+      lastPrepDurationMs: stored.lastPrepDurationMs || 0,
       prepMessage: stored.prepMessage || "",
       sessionState: stored.sessionState || "stopped",
       sessionStartedAt: stored.sessionStartedAt || "",
       sessionStoppedAt: stored.sessionStoppedAt || "",
+      viewerLaunch: stored.viewerLaunch || buildMissingDevice(row.serial).viewerLaunch,
       lastSeenAt: new Date().toISOString()
     };
 
@@ -1084,7 +1119,8 @@ function performDevicePublicIpCheck(serial, reason) {
       changedSinceLastPrep: Boolean(deviceState.publicIp?.changedSinceLastPrep),
       duplicateWith: [],
       reusedRecently: Boolean(deviceState.publicIp?.reusedRecently),
-      reusedWithinLast22: deviceState.publicIp?.reusedWithinLast22 || [],
+      reusedWithinLast50: deviceState.publicIp?.reusedWithinLast50 || [],
+      last50History: deviceState.publicIp?.last50History || [],
       lastError: failure || "Public IP lookup failed on device side.",
       lastReason: reason
     };
@@ -1113,11 +1149,11 @@ function performDevicePublicIpCheck(serial, reason) {
   const duplicateWith = currentOtherDevices
     .filter(device => device.publicIp?.currentIp && device.publicIp.currentIp === resolvedIp)
     .map(device => device.serial);
-  const recentSuccessfulEntries = getRecentSuccessfulIpEntries(22);
-  const reusedWithinLast22 = recentSuccessfulEntries
+  const recentSuccessfulEntries = getRecentSuccessfulIpEntries(50);
+  const reusedWithinLast50 = recentSuccessfulEntries
     .filter(entry => entry.ip === resolvedIp)
-    .slice(0, 5);
-  const reusedRecently = reusedWithinLast22.length > 0;
+    .slice(0, 10);
+  const reusedRecently = reusedWithinLast50.length > 0;
   if (duplicateWith.length) {
     status = "duplicate";
   }
@@ -1130,7 +1166,8 @@ function performDevicePublicIpCheck(serial, reason) {
     changedSinceLastPrep,
     duplicateWith,
     reusedRecently,
-    reusedWithinLast22,
+    reusedWithinLast50,
+    last50History: recentSuccessfulEntries,
     lastError: "",
     lastReason: reason
   };
@@ -1191,9 +1228,15 @@ function parsePublicIp(output) {
 function processPrepQueue() {
   if (preparingSerial || !(state.queue || []).length) return;
   const serial = state.queue[0];
+  const prepStartedAt = new Date().toISOString();
   preparingSerial = serial;
   state.queue = state.queue.slice(1);
-  updateDeviceState(serial, { prepState: "preparing", prepMessage: "Prep workflow in progress" });
+  updateDeviceState(serial, {
+    prepState: "preparing",
+    prepMessage: "Prep workflow in progress",
+    prepStartedAt,
+    prepFinishedAt: ""
+  });
   logActivity("queue", "Prep worker claimed queued device", serial);
 
   const child = runPowerShellScript(
@@ -1204,11 +1247,15 @@ function processPrepQueue() {
 
   child.on("exit", code => {
     const success = code === 0;
+    const prepFinishedAt = new Date().toISOString();
+    const prepDurationMs = Math.max(0, new Date(prepFinishedAt).getTime() - new Date(prepStartedAt).getTime());
     updateDeviceState(serial, {
       prepState: success ? "ready" : "failed",
-      prepMessage: success ? "Prep completed successfully" : "Prep failed; review logs"
+      prepMessage: success ? "Prep completed successfully" : "Prep failed; review logs",
+      prepFinishedAt,
+      lastPrepDurationMs: prepDurationMs
     });
-    logActivity("queue", success ? "Prep completed" : `Prep failed with exit code ${code}`, serial);
+    logActivity("queue", success ? `Prep completed in ${formatDuration(prepDurationMs)}` : `Prep failed with exit code ${code} after ${formatDuration(prepDurationMs)}`, serial);
     if (success) {
       runDevicePublicIpCheck(serial, "post-prep").catch(error => {
         logActivity("ip-check", `Automatic post-prep IP check failed: ${error.message}`, serial);
@@ -1217,6 +1264,66 @@ function processPrepQueue() {
     preparingSerial = null;
     refreshDevices();
     processPrepQueue();
+  });
+}
+
+function launchViewerForDevice(serial, username, sourceAction) {
+  updateDeviceState(serial, {
+    viewerLaunch: {
+      status: "launching",
+      sourceAction,
+      requestedAt: new Date().toISOString(),
+      confirmedAt: "",
+      pid: null,
+      processName: "",
+      filePath: "",
+      aliveAfterLaunch: false,
+      lastError: ""
+    }
+  });
+  const child = runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: false });
+  let stdout = "";
+  if (child.stdout) {
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString();
+    });
+  }
+
+  child.on("exit", code => {
+    const payload = parseViewerLaunchPayload(stdout);
+    if (code === 0 && payload?.ok) {
+      updateDeviceState(serial, {
+        viewerLaunch: {
+          status: payload.aliveAfterLaunch ? "confirmed" : "unverified",
+          sourceAction,
+          requestedAt: state.devices?.[serial]?.viewerLaunch?.requestedAt || new Date().toISOString(),
+          confirmedAt: payload.startedAt || new Date().toISOString(),
+          pid: payload.pid || null,
+          processName: payload.processName || "",
+          filePath: payload.filePath || "",
+          aliveAfterLaunch: Boolean(payload.aliveAfterLaunch),
+          lastError: ""
+        }
+      });
+      logActivity("scrcpy", `Viewer launch ${payload.aliveAfterLaunch ? "confirmed" : "not yet confirmed"} for ${sourceAction} with PID ${payload.pid || "unknown"} by ${username}`, serial);
+      return;
+    }
+
+    const errorMessage = payload?.error || `Viewer launch script exited with code ${code}`;
+    updateDeviceState(serial, {
+      viewerLaunch: {
+        status: "failed",
+        sourceAction,
+        requestedAt: state.devices?.[serial]?.viewerLaunch?.requestedAt || new Date().toISOString(),
+        confirmedAt: "",
+        pid: null,
+        processName: "",
+        filePath: payload?.filePath || "",
+        aliveAfterLaunch: false,
+        lastError: errorMessage
+      }
+    });
+    logActivity("scrcpy", `Viewer launch failed for ${sourceAction}: ${errorMessage}`, serial);
   });
 }
 
@@ -1235,6 +1342,180 @@ function loadRoutingAudit() {
   });
 }
 
+function buildPrepTelemetry(devices) {
+  const active = devices.find(device => device.serial === preparingSerial) || null;
+  const completed = devices
+    .filter(device => device.prepFinishedAt)
+    .sort((a, b) => new Date(b.prepFinishedAt).getTime() - new Date(a.prepFinishedAt).getTime())[0] || null;
+  return {
+    active: active ? {
+      serial: active.serial,
+      label: formatDeviceLabel(active),
+      startedAt: active.prepStartedAt || "",
+      elapsedMs: getActivePrepElapsedMs(active),
+      queueDepthBehind: (state.queue || []).length
+    } : null,
+    lastCompleted: completed ? {
+      serial: completed.serial,
+      label: formatDeviceLabel(completed),
+      finishedAt: completed.prepFinishedAt || "",
+      durationMs: completed.lastPrepDurationMs || 0,
+      prepState: completed.prepState || "idle"
+    } : null
+  };
+}
+
+function enrichDeviceForStatus(device, routingAudit) {
+  const normalizedPublicIp = normalizePublicIpState(device.serial, device.publicIp);
+  return {
+    ...device,
+    publicIp: normalizedPublicIp,
+    prepElapsedMs: getActivePrepElapsedMs(device),
+    queueWaitMs: getQueueWaitMs(device),
+    routingRisk: getDeviceRoutingRisk({ ...device, publicIp: normalizedPublicIp }, routingAudit)
+  };
+}
+
+function getActivePrepElapsedMs(device) {
+  if (device.prepState !== "preparing" || !device.prepStartedAt) {
+    return 0;
+  }
+  return Math.max(0, Date.now() - new Date(device.prepStartedAt).getTime());
+}
+
+function getQueueWaitMs(device) {
+  if (device.prepState !== "queued" || !device.prepEnqueuedAt) {
+    return 0;
+  }
+  return Math.max(0, Date.now() - new Date(device.prepEnqueuedAt).getTime());
+}
+
+function buildRoutingGuard(routingAudit) {
+  const hardBlockChecks = new Set([
+    "PhoneFarm Bind Mode",
+    "Tailscale Exit Node",
+    "Internet Connection Sharing",
+    "WinHTTP Proxy",
+    "Windows User Proxy",
+    "IPv4 Forwarding"
+  ]);
+  const failedChecks = (routingAudit.checks || []).filter(check => {
+    if (check.ok || !hardBlockChecks.has(check.name)) {
+      return false;
+    }
+    const detail = String(check.detail || "").toLowerCase();
+    if (check.name === "PhoneFarm Bind Mode") {
+      return !detail.includes("127.0.0.1");
+    }
+    if (check.name === "Tailscale Exit Node") {
+      return detail.includes("configured as an exit node");
+    }
+    if (check.name === "Internet Connection Sharing") {
+      return detail.includes("running");
+    }
+    if (check.name === "WinHTTP Proxy") {
+      return !detail.includes("direct access");
+    }
+    if (check.name === "Windows User Proxy") {
+      return detail.includes("proxy enabled");
+    }
+    if (check.name === "IPv4 Forwarding") {
+      return detail.includes("enabled via ipenablerouter");
+    }
+    return false;
+  });
+  const pcPublicIpCheck = (routingAudit.checks || []).find(check => check.name === "PC Public IP");
+  return {
+    blocked: failedChecks.length > 0,
+    reasons: failedChecks.map(check => `${check.name}: ${check.detail}`),
+    checkedAt: routingAudit.checkedAt || "",
+    pcPublicIp: extractPcPublicIp(pcPublicIpCheck?.detail || ""),
+    dashboardAccessPath: routingAudit.dashboardAccessPath || "",
+    deviceTrafficPath: routingAudit.deviceTrafficPath || ""
+  };
+}
+
+function normalizePublicIpState(serial, publicIp) {
+  const historyEntries = (ensureDeviceIpHistory(serial).entries || []).filter(entry => entry.ip).slice(0, 50);
+  return {
+    ...(publicIp || {}),
+    reusedRecently: Boolean(publicIp?.reusedRecently),
+    reusedWithinLast50: publicIp?.reusedWithinLast50 || publicIp?.reusedWithinLast22 || [],
+    last50History: publicIp?.last50History || historyEntries
+  };
+}
+
+function getDeviceRoutingRisk(device, routingAudit) {
+  const routingGuard = buildRoutingGuard(routingAudit);
+  const interfaceName = String(device.network?.interface || "").toLowerCase();
+  if (interfaceName === "lo" || interfaceName === "loopback") {
+    return {
+      level: "critical",
+      label: "Loopback Route",
+      detail: "Device network reports a loopback interface. That is not a valid direct data path."
+    };
+  }
+
+  if (routingGuard.pcPublicIp && device.publicIp?.currentIp && device.publicIp.currentIp === routingGuard.pcPublicIp) {
+    return {
+      level: "warning",
+      label: "Shared Egress",
+      detail: "Phone public IP matches the PC public IP. Verify the phone is not leaving through the PC."
+    };
+  }
+
+  if (routingGuard.blocked) {
+    return {
+      level: "warning",
+      label: "PC Guard Failed",
+      detail: "PC routing guardrails are not fully clean. Prep and session starts are blocked until fixed."
+    };
+  }
+
+  if (!device.publicIp?.currentIp) {
+    return {
+      level: "neutral",
+      label: "Unverified",
+      detail: "No phone-side public IP verification yet."
+    };
+  }
+
+  return {
+    level: "safe",
+    label: "Separated",
+    detail: "No direct sign that this phone is routing through the PC."
+  };
+}
+
+function extractPcPublicIp(detail) {
+  return parsePublicIp(detail || "");
+}
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.max(0, Math.round((durationMs || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDeviceLabel(device) {
+  return device.nickname || (device.phoneNumber ? formatPhoneNumber(device.phoneNumber) : device.serial);
+}
+
+function parseViewerLaunchPayload(stdout) {
+  const trimmed = String(stdout || "").trim();
+  if (!trimmed) return null;
+  const lines = trimmed.split(/\r?\n/).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      return JSON.parse(lines[index]);
+    } catch (error) {
+      // Keep scanning for the last JSON line from the PowerShell launcher.
+    }
+  }
+  return null;
+}
+
 function runPowerShellScript(scriptName, scriptArgs = [], options) {
   const scriptPath = path.join(SCRIPTS_DIR, scriptName);
   const argsDescription = scriptArgs.length ? ` ${scriptArgs.join(" ")}` : "";
@@ -1244,7 +1525,7 @@ function runPowerShellScript(scriptName, scriptArgs = [], options) {
     cwd: ROOT,
     windowsHide: true,
     detached: Boolean(options?.detached),
-    stdio: ["ignore", "ignore", "pipe"]
+    stdio: ["ignore", "pipe", "pipe"]
   });
 
   child.on("error", error => {

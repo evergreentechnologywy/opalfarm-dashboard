@@ -192,6 +192,46 @@ function Ensure-AirplaneModeOff {
   }
 }
 
+function Disable-LocationServices {
+  Write-PrepLog -Category "prep" -Message "Disabling device location services"
+
+  $helperResult = Invoke-MacroDroidHelper -ExtraArguments @(
+    "--es", "command_type", "set_system_setting",
+    "--es", "setting_type", "secure",
+    "--es", "setting_key", "location_mode",
+    "--es", "setting_value_type", "int",
+    "--es", "setting_value", "0",
+    "--es", "macro_name", "PhoneFarm Prep"
+  )
+  if ($helperResult.ExitCode -eq 0) {
+    Write-PrepLog -Category "prep" -Message "MacroDroid Helper accepted location disable request"
+  }
+
+  $attempts = @(
+    @("shell", "settings", "put", "secure", "location_mode", "0"),
+    @("shell", "cmd", "location", "set-location-enabled", "false"),
+    @("shell", "settings", "put", "secure", "location_providers_allowed", "-gps"),
+    @("shell", "settings", "put", "secure", "location_providers_allowed", "-network")
+  )
+
+  foreach ($attempt in $attempts) {
+    $result = Invoke-Adb -Arguments (@("-s", $Serial) + $attempt) -IgnoreErrors
+    Write-PrepLog -Category "prep" -Message ("Location command attempt: adb " + ($attempt -join " ") + " => exit " + $result.ExitCode + " output=" + $result.Output)
+  }
+
+  Start-Sleep -Seconds 2
+  $modeCheck = Invoke-Adb -Arguments @("-s", $Serial, "shell", "settings", "get", "secure", "location_mode") -IgnoreErrors
+  $enabledCheck = Invoke-Adb -Arguments @("-s", $Serial, "shell", "cmd", "location", "is-location-enabled") -IgnoreErrors
+  Write-PrepLog -Category "prep" -Message ("Location verify mode => exit " + $modeCheck.ExitCode + " output=" + $modeCheck.Output)
+  Write-PrepLog -Category "prep" -Message ("Location verify enabled => exit " + $enabledCheck.ExitCode + " output=" + $enabledCheck.Output)
+
+  $modeDisabled = $modeCheck.Output.Trim() -eq "0"
+  $enabledDisabled = $enabledCheck.Output.Trim().ToLowerInvariant() -eq "false"
+  if (-not ($modeDisabled -or $enabledDisabled)) {
+    throw "Unable to verify that location services are disabled."
+  }
+}
+
 function Enable-Hotspot {
   Write-PrepLog -Category "prep" -Message "Attempting to re-enable hotspot"
 
@@ -337,6 +377,7 @@ try {
   Write-PrepLog -Category "prep" -Message "Prep sequence started"
   Wait-ForDeviceOnline -TimeoutSeconds $timeout
   Ensure-AirplaneModeOff
+  Disable-LocationServices
   Write-PrepLog -Category "prep" -Message "Sleeping for randomized hold: $randomWait seconds"
   Start-Sleep -Seconds $randomWait
   try {
@@ -347,6 +388,7 @@ try {
     Invoke-RebootRecovery -TimeoutSeconds $timeout
     Wait-ForDeviceOnline -TimeoutSeconds $timeout
   }
+  Disable-LocationServices
   Write-PrepLog -Category "prep" -Message "Prep sequence completed successfully"
   exit 0
 }

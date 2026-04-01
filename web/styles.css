@@ -173,6 +173,12 @@ h2 {
   flex-wrap: wrap;
 }
 
+.hero-status-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .subtitle,
 .panel-copy {
   color: var(--text-muted);
@@ -260,6 +266,8 @@ h2 {
   border-radius: 22px;
   content-visibility: auto;
   contain-intrinsic-size: 102px;
+  text-align: left;
+  cursor: pointer;
 }
 
 .stat-card span {
@@ -499,6 +507,27 @@ h2 {
   font-size: 1.05rem;
 }
 
+.routing-paths {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.route-chip {
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.route-chip-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+
 .queue-list,
 .activity-list {
   display: grid;
@@ -660,6 +689,44 @@ h2 {
   align-items: center;
 }
 
+.state-pill-danger {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+  border-color: rgba(180, 35, 24, 0.18);
+  font-weight: 700;
+}
+
+.history-drawer {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: rgba(248, 250, 252, 0.86);
+  padding: 12px 14px;
+}
+
+.history-drawer summary {
+  cursor: pointer;
+  color: var(--heading);
+  font-weight: 700;
+}
+
+.history-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.history-entry,
+.history-empty {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 .device-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -741,6 +808,12 @@ h2 {
   flex-wrap: wrap;
   gap: 6px;
   min-width: 430px;
+}
+
+.table-subline {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.76rem;
 }
 
 .table-action {

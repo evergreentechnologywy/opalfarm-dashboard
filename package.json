@@ -5,6 +5,7 @@
   "description": "Local-first Android device dashboard for Windows",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\test-phonefarm-smoke.ps1"
   }
 }
