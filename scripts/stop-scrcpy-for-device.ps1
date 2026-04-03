@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
-  [string]$Serial
+  [string]$Serial,
+
+  [int]$Pid = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,15 +22,24 @@ function Write-ActivityLog {
   Add-Content -Path $activityLogPath -Value "[$timestamp] [$Category]$serialSegment $Message"
 }
 
-$escapedSerial = $Serial.Replace("'", "''")
-$candidates = Get-CimInstance Win32_Process -Filter "Name = 'scrcpy.exe'" |
-  Where-Object {
-    $_.CommandLine -and (
-      $_.CommandLine -match [regex]::Escape("--serial $Serial") -or
-      $_.CommandLine -match [regex]::Escape("--serial=""$Serial""") -or
-      $_.CommandLine -match [regex]::Escape("--serial `"$Serial`"")
-    )
+if ($Pid -gt 0) {
+  $directProcess = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+  if ($directProcess) {
+    Stop-Process -Id $directProcess.Id -Force
+    Write-ActivityLog -Category "scrcpy" -Message ("Stopped scrcpy process " + $directProcess.Id + " from recorded PID") -DeviceSerial $Serial
+    exit 0
   }
+}
+
+$windowTitle = "PhoneFarm $Serial"
+$candidates = @(Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue | Where-Object {
+  try {
+    $_.MainWindowTitle -eq $windowTitle
+  }
+  catch {
+    $false
+  }
+})
 
 if (-not $candidates) {
   Write-ActivityLog -Category "scrcpy" -Message "No scrcpy process found to stop" -DeviceSerial $Serial
@@ -36,8 +47,8 @@ if (-not $candidates) {
 }
 
 foreach ($process in $candidates) {
-  Stop-Process -Id $process.ProcessId -Force
-  Write-ActivityLog -Category "scrcpy" -Message ("Stopped scrcpy process " + $process.ProcessId) -DeviceSerial $Serial
+  Stop-Process -Id $process.Id -Force
+  Write-ActivityLog -Category "scrcpy" -Message ("Stopped scrcpy process " + $process.Id) -DeviceSerial $Serial
 }
 
 exit 0

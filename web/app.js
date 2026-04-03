@@ -698,6 +698,9 @@ function formatPrepTimer(device) {
 
 function formatViewerLaunch(viewerLaunch) {
   const status = viewerLaunch?.status || "unknown";
+  if (status === "fallback") {
+    return `Vysor Fallback${viewerLaunch?.pid ? ` PID ${viewerLaunch.pid}` : ""}`;
+  }
   if (status === "confirmed") {
     return `Confirmed${viewerLaunch?.pid ? ` PID ${viewerLaunch.pid}` : ""}`;
   }
@@ -715,6 +718,9 @@ function formatViewerLaunch(viewerLaunch) {
 
 function buildViewerLaunchDetails(viewerLaunch) {
   const status = viewerLaunch?.status || "unknown";
+  if (status === "fallback") {
+    return `scrcpy failed, so Vysor was opened${viewerLaunch?.manualSelectionRequired ? " for manual device selection" : ""}.${viewerLaunch?.pid ? ` PID ${viewerLaunch.pid}` : ""}${viewerLaunch?.lastError ? ` | scrcpy: ${viewerLaunch.lastError}` : ""}`;
+  }
   if (status === "confirmed" || status === "unverified") {
     const pidText = viewerLaunch?.pid ? `PID ${viewerLaunch.pid}` : "PID unknown";
     return `Viewer launch ${status}. ${pidText}${viewerLaunch?.filePath ? ` | ${viewerLaunch.filePath}` : ""}`;

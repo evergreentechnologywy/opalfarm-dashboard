@@ -555,8 +555,11 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   }
 
   if (action === "open-control") {
-    launchViewerForDevice(serial, user.username, "open-control");
-    return sendJson(res, 200, { ok: true });
+    const launchResult = await launchViewerForDevice(serial, user.username, "open-control");
+    if (!launchResult.success) {
+      return sendJson(res, 500, { error: launchResult.error || "Viewer launch failed", viewerLaunch: launchResult.viewerLaunch || null });
+    }
+    return sendJson(res, 200, { ok: true, viewerLaunch: launchResult.viewerLaunch });
   }
 
   if (action === "check-ip") {
@@ -618,14 +621,22 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     if (!verification.success) {
       return sendJson(res, 409, { error: verification.error || "IP verification failed; session not started" });
     }
-    launchViewerForDevice(serial, user.username, "start-session");
+    const launchResult = await launchViewerForDevice(serial, user.username, "start-session");
+    if (!launchResult.success) {
+      return sendJson(res, 500, { error: launchResult.error || "Viewer launch failed; session not started", viewerLaunch: launchResult.viewerLaunch || null });
+    }
     updateDeviceState(serial, { sessionState: "running", sessionStartedAt: new Date().toISOString() });
-    logActivity("session", `Session started by ${user.username} and scrcpy launched`, serial);
-    return sendJson(res, 200, { ok: true });
+    logActivity("session", `Session started by ${user.username} and viewer launch confirmed`, serial);
+    return sendJson(res, 200, { ok: true, viewerLaunch: launchResult.viewerLaunch });
   }
 
   if (action === "stop-session") {
-    runPowerShellScript("stop-scrcpy-for-device.ps1", ["-Serial", serial], { detached: true });
+    const viewerPid = state.devices?.[serial]?.viewerLaunch?.pid;
+    const stopArgs = ["-Serial", serial];
+    if (viewerPid) {
+      stopArgs.push("-Pid", String(viewerPid));
+    }
+    runPowerShellScript("stop-scrcpy-for-device.ps1", stopArgs, { detached: true, windowsHide: false });
     updateDeviceState(serial, { sessionState: "stopped", sessionStoppedAt: new Date().toISOString() });
     logActivity("session", `Session stopped by ${user.username} and scrcpy close requested`, serial);
     return sendJson(res, 200, { ok: true });
@@ -710,6 +721,9 @@ function buildMissingDevice(serial) {
       processName: "",
       filePath: "",
       aliveAfterLaunch: false,
+      windowReady: false,
+      fallbackViewer: "",
+      manualSelectionRequired: false,
       lastError: ""
     }
   };
@@ -1268,62 +1282,96 @@ function processPrepQueue() {
 }
 
 function launchViewerForDevice(serial, username, sourceAction) {
+  const requestedAt = new Date().toISOString();
   updateDeviceState(serial, {
     viewerLaunch: {
       status: "launching",
       sourceAction,
-      requestedAt: new Date().toISOString(),
+      requestedAt,
       confirmedAt: "",
       pid: null,
       processName: "",
       filePath: "",
       aliveAfterLaunch: false,
+      windowReady: false,
+      fallbackViewer: "",
+      manualSelectionRequired: false,
       lastError: ""
     }
   });
-  const child = runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: false });
-  let stdout = "";
-  if (child.stdout) {
-    child.stdout.on("data", chunk => {
-      stdout += chunk.toString();
-    });
-  }
 
-  child.on("exit", code => {
-    const payload = parseViewerLaunchPayload(stdout);
-    if (code === 0 && payload?.ok) {
-      updateDeviceState(serial, {
-        viewerLaunch: {
-          status: payload.aliveAfterLaunch ? "confirmed" : "unverified",
+  return new Promise(resolve => {
+    const child = runPowerShellScript("open-scrcpy-for-device.ps1", ["-Serial", serial], { detached: false, windowsHide: false });
+    let stdout = "";
+    if (child.stdout) {
+      child.stdout.on("data", chunk => {
+        stdout += chunk.toString();
+      });
+    }
+
+    child.on("error", error => {
+      const message = error.message || "Viewer launch failed to start";
+      const viewerLaunch = {
+        status: "failed",
+        sourceAction,
+        requestedAt,
+        confirmedAt: "",
+        pid: null,
+        processName: "",
+        filePath: "",
+        aliveAfterLaunch: false,
+        windowReady: false,
+        fallbackViewer: "",
+        manualSelectionRequired: false,
+        lastError: message
+      };
+      updateDeviceState(serial, { viewerLaunch });
+      logActivity("scrcpy", `Viewer launch failed for ${sourceAction}: ${message}`, serial);
+      resolve({ success: false, error: message, viewerLaunch });
+    });
+
+    child.on("exit", code => {
+      const payload = parseViewerLaunchPayload(stdout);
+      if (code === 0 && payload?.ok) {
+        const viewerLaunch = {
+          status: payload.fallbackViewer ? "fallback" : (payload.windowReady ? "confirmed" : "unverified"),
           sourceAction,
-          requestedAt: state.devices?.[serial]?.viewerLaunch?.requestedAt || new Date().toISOString(),
+          requestedAt,
           confirmedAt: payload.startedAt || new Date().toISOString(),
           pid: payload.pid || null,
           processName: payload.processName || "",
           filePath: payload.filePath || "",
           aliveAfterLaunch: Boolean(payload.aliveAfterLaunch),
-          lastError: ""
-        }
-      });
-      logActivity("scrcpy", `Viewer launch ${payload.aliveAfterLaunch ? "confirmed" : "not yet confirmed"} for ${sourceAction} with PID ${payload.pid || "unknown"} by ${username}`, serial);
-      return;
-    }
+          windowReady: Boolean(payload.windowReady),
+          fallbackViewer: payload.fallbackViewer || "",
+          manualSelectionRequired: Boolean(payload.manualSelectionRequired),
+          lastError: payload.fallbackViewer ? (payload.scrcpyError || "") : ""
+        };
+        updateDeviceState(serial, { viewerLaunch });
+        logActivity("scrcpy", `Viewer launch ${payload.fallbackViewer ? `fell back to ${payload.fallbackViewer}` : (payload.windowReady ? "confirmed" : "unverified")} for ${sourceAction} with PID ${payload.pid || "unknown"} by ${username}`, serial);
+        resolve({ success: true, viewerLaunch, payload });
+        return;
+      }
 
-    const errorMessage = payload?.error || `Viewer launch script exited with code ${code}`;
-    updateDeviceState(serial, {
-      viewerLaunch: {
+      const errorMessage = payload?.error || `Viewer launch script exited with code ${code}`;
+      const viewerLaunch = {
         status: "failed",
         sourceAction,
-        requestedAt: state.devices?.[serial]?.viewerLaunch?.requestedAt || new Date().toISOString(),
+        requestedAt,
         confirmedAt: "",
         pid: null,
         processName: "",
         filePath: payload?.filePath || "",
         aliveAfterLaunch: false,
+        windowReady: false,
+        fallbackViewer: "",
+        manualSelectionRequired: false,
         lastError: errorMessage
-      }
+      };
+      updateDeviceState(serial, { viewerLaunch });
+      logActivity("scrcpy", `Viewer launch failed for ${sourceAction}: ${errorMessage}`, serial);
+      resolve({ success: false, error: errorMessage, viewerLaunch, payload });
     });
-    logActivity("scrcpy", `Viewer launch failed for ${sourceAction}: ${errorMessage}`, serial);
   });
 }
 
@@ -1527,7 +1575,7 @@ function runPowerShellScript(scriptName, scriptArgs = [], options) {
   const psArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...scriptArgs];
   const child = spawn("powershell.exe", psArgs, {
     cwd: ROOT,
-    windowsHide: true,
+    windowsHide: options?.windowsHide ?? true,
     detached: Boolean(options?.detached),
     stdio: ["ignore", "pipe", "pipe"]
   });
