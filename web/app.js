@@ -460,8 +460,6 @@ function renderDeviceCard(device) {
   const ipHistoryState = fragment.querySelector(".state-ip-history");
   const viewerLaunchState = fragment.querySelector(".state-viewer-launch");
   const prepMessageState = fragment.querySelector(".state-prep-message");
-  const historyList = fragment.querySelector(".history-list");
-  const historyDrawer = fragment.querySelector(".history-drawer");
 
   kicker.textContent = device.phoneNumber ? `Device ${String(device.phoneNumber).padStart(2, "0")}` : "Device";
   name.textContent = formatDeviceName(device);
@@ -491,8 +489,6 @@ function renderDeviceCard(device) {
   prepMessageState.textContent = device.prepMessage || "No prep message";
   duplicateBadge.hidden = !isDuplicate(device);
   reuseBadge.hidden = !isReused(device);
-  historyDrawer.open = Boolean(device.publicIp?.reusedRecently);
-  historyList.innerHTML = renderIpHistoryMarkup(device.publicIp?.last100History || []);
 
   root.classList.add(`prep-${device.prepState || "idle"}`);
   root.classList.add(`risk-${device.routingRisk?.level || "neutral"}`);
@@ -553,7 +549,7 @@ function isReused(device) {
 function buildReuseWarning(device) {
   if (device.publicIp?.reusedRecently) {
     const count = device.publicIp?.reusedWithinLast100?.length || 0;
-    return `BIG WARNING: this IP appeared ${count} time${count === 1 ? "" : "s"} in the last 100 successful checks.`;
+    return `BIG WARNING: this IP was also seen on ${count} other device${count === 1 ? "" : "s"} in the last 100 successful checks.`;
   }
   return `Route risk: ${device.routingRisk?.detail || deviceWarningLabel(device)}`;
 }
@@ -561,21 +557,13 @@ function buildReuseWarning(device) {
 function buildIpHistorySummary(device) {
   const entries = device.publicIp?.last100History || [];
   if (!entries.length) {
-    return "Last 100 IP checks: no successful history yet.";
+    return "IP monitor: no successful history yet.";
   }
   const uniqueIps = new Set(entries.map(entry => entry.ip).filter(Boolean));
-  return `Last 100 successful checks: ${entries.length} entries across ${uniqueIps.size} unique IPs.`;
-}
-
-function renderIpHistoryMarkup(entries) {
-  if (!entries.length) {
-    return `<div class="history-empty">No successful IP history yet.</div>`;
+  if (device.publicIp?.reusedRecently) {
+    return `IP monitor: ${entries.length} successful checks tracked. Cross-device reuse detected.`;
   }
-
-  return entries.map((entry, index) => {
-    const label = `${entry.ip || "Unknown IP"} | ${entry.serial || "-"} | ${entry.reason || "manual"} | ${formatDateTime(entry.timestamp)}`;
-    return `<div class="history-entry"><span class="history-rank">#${index + 1}</span><span>${escapeHtml(label)}</span></div>`;
-  }).join("");
+  return `IP monitor: ${entries.length} successful checks across ${uniqueIps.size} unique IPs.`;
 }
 
 function deviceWarningLabel(device) {

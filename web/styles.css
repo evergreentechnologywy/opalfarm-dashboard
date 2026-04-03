@@ -696,59 +696,6 @@ h2 {
   font-weight: 700;
 }
 
-.history-drawer {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(248, 250, 252, 0.86);
-  padding: 12px 14px;
-}
-
-.history-drawer summary {
-  cursor: pointer;
-  color: var(--heading);
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.history-list {
-  display: grid;
-  gap: 8px;
-  margin-top: 12px;
-  max-height: 280px;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.history-entry,
-.history-empty {
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.9);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  font-size: 0.8rem;
-}
-
-.history-entry {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 10px;
-  align-items: start;
-}
-
-.history-rank {
-  display: inline-flex;
-  min-width: 34px;
-  justify-content: center;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: var(--neutral-bg);
-  color: var(--neutral-text);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
 
 .device-actions {
   display: grid;

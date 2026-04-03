@@ -1151,7 +1151,7 @@ function performDevicePublicIpCheck(serial, reason) {
     .map(device => device.serial);
   const recentSuccessfulEntries = getRecentSuccessfulIpEntries(100);
   const reusedWithinLast100 = recentSuccessfulEntries
-    .filter(entry => entry.ip === resolvedIp)
+    .filter(entry => entry.ip === resolvedIp && entry.serial !== serial)
     .slice(0, 10);
   const reusedRecently = reusedWithinLast100.length > 0;
   if (duplicateWith.length) {
@@ -1437,11 +1437,15 @@ function buildRoutingGuard(routingAudit) {
 
 function normalizePublicIpState(serial, publicIp) {
   const historyEntries = (ensureDeviceIpHistory(serial).entries || []).filter(entry => entry.ip).slice(0, 100);
+  const normalizedHistory = publicIp?.last100History || publicIp?.last50History || historyEntries;
+  const crossDeviceReuse = normalizedHistory
+    .filter(entry => entry.ip && entry.ip === publicIp?.currentIp && entry.serial && entry.serial !== serial)
+    .slice(0, 10);
   return {
     ...(publicIp || {}),
-    reusedRecently: Boolean(publicIp?.reusedRecently),
-    reusedWithinLast100: publicIp?.reusedWithinLast100 || publicIp?.reusedWithinLast50 || publicIp?.reusedWithinLast22 || [],
-    last100History: publicIp?.last100History || publicIp?.last50History || historyEntries
+    reusedRecently: crossDeviceReuse.length > 0,
+    reusedWithinLast100: crossDeviceReuse,
+    last100History: normalizedHistory
   };
 }
 
