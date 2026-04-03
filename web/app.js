@@ -402,7 +402,7 @@ function renderTableView(devices) {
       <td>${escapeHtml(formatGmail(device.account))}</td>
       <td>${escapeHtml(device.publicIp?.currentIp || "Not checked")}</td>
       <td>${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-")}</td>
-      <td>${escapeHtml(isReused(device) ? "BIG WARNING: Reused in last 50" : (device.routingRisk?.label || deviceWarningLabel(device)))}</td>
+      <td>${escapeHtml(isReused(device) ? "BIG WARNING: Reused in last 100" : (device.routingRisk?.label || deviceWarningLabel(device)))}</td>
       <td>
         <div class="table-actions">
           ${renderTableActionButton(device, "open-control", "Open Control")}
@@ -492,7 +492,7 @@ function renderDeviceCard(device) {
   duplicateBadge.hidden = !isDuplicate(device);
   reuseBadge.hidden = !isReused(device);
   historyDrawer.open = Boolean(device.publicIp?.reusedRecently);
-  historyList.innerHTML = renderIpHistoryMarkup(device.publicIp?.last50History || []);
+  historyList.innerHTML = renderIpHistoryMarkup(device.publicIp?.last100History || []);
 
   root.classList.add(`prep-${device.prepState || "idle"}`);
   root.classList.add(`risk-${device.routingRisk?.level || "neutral"}`);
@@ -552,19 +552,19 @@ function isReused(device) {
 
 function buildReuseWarning(device) {
   if (device.publicIp?.reusedRecently) {
-    const count = device.publicIp?.reusedWithinLast50?.length || 0;
-    return `BIG WARNING: this IP appeared ${count} time${count === 1 ? "" : "s"} in the last 50 successful checks.`;
+    const count = device.publicIp?.reusedWithinLast100?.length || 0;
+    return `BIG WARNING: this IP appeared ${count} time${count === 1 ? "" : "s"} in the last 100 successful checks.`;
   }
   return `Route risk: ${device.routingRisk?.detail || deviceWarningLabel(device)}`;
 }
 
 function buildIpHistorySummary(device) {
-  const entries = device.publicIp?.last50History || [];
+  const entries = device.publicIp?.last100History || [];
   if (!entries.length) {
-    return "Last 50 IP checks: no successful history yet.";
+    return "Last 100 IP checks: no successful history yet.";
   }
   const uniqueIps = new Set(entries.map(entry => entry.ip).filter(Boolean));
-  return `Last 50 successful checks: ${entries.length} entries across ${uniqueIps.size} unique IPs.`;
+  return `Last 100 successful checks: ${entries.length} entries across ${uniqueIps.size} unique IPs.`;
 }
 
 function renderIpHistoryMarkup(entries) {
@@ -572,9 +572,9 @@ function renderIpHistoryMarkup(entries) {
     return `<div class="history-empty">No successful IP history yet.</div>`;
   }
 
-  return entries.map(entry => {
+  return entries.map((entry, index) => {
     const label = `${entry.ip || "Unknown IP"} | ${entry.serial || "-"} | ${entry.reason || "manual"} | ${formatDateTime(entry.timestamp)}`;
-    return `<div class="history-entry">${escapeHtml(label)}</div>`;
+    return `<div class="history-entry"><span class="history-rank">#${index + 1}</span><span>${escapeHtml(label)}</span></div>`;
   }).join("");
 }
 

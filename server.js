@@ -664,8 +664,8 @@ function buildMissingDevice(serial) {
     changedSinceLastPrep: false,
     duplicateWith: [],
     reusedRecently: false,
-    reusedWithinLast50: [],
-    last50History: [],
+    reusedWithinLast100: [],
+    last100History: [],
     lastError: "",
     lastReason: ""
   };
@@ -1119,8 +1119,8 @@ function performDevicePublicIpCheck(serial, reason) {
       changedSinceLastPrep: Boolean(deviceState.publicIp?.changedSinceLastPrep),
       duplicateWith: [],
       reusedRecently: Boolean(deviceState.publicIp?.reusedRecently),
-      reusedWithinLast50: deviceState.publicIp?.reusedWithinLast50 || [],
-      last50History: deviceState.publicIp?.last50History || [],
+      reusedWithinLast100: deviceState.publicIp?.reusedWithinLast100 || deviceState.publicIp?.reusedWithinLast50 || [],
+      last100History: deviceState.publicIp?.last100History || deviceState.publicIp?.last50History || [],
       lastError: failure || "Public IP lookup failed on device side.",
       lastReason: reason
     };
@@ -1135,7 +1135,7 @@ function performDevicePublicIpCheck(serial, reason) {
         error: failedState.lastError
       },
       ...(history.entries || [])
-    ].slice(0, 50);
+    ].slice(0, 100);
     saveDeviceIpHistory();
     logIpCheck(`FAILED reason=${reason} error=${failedState.lastError}`, serial);
     logActivity("ip-check", `Public IP check failed: ${failedState.lastError}`, serial);
@@ -1149,11 +1149,11 @@ function performDevicePublicIpCheck(serial, reason) {
   const duplicateWith = currentOtherDevices
     .filter(device => device.publicIp?.currentIp && device.publicIp.currentIp === resolvedIp)
     .map(device => device.serial);
-  const recentSuccessfulEntries = getRecentSuccessfulIpEntries(50);
-  const reusedWithinLast50 = recentSuccessfulEntries
+  const recentSuccessfulEntries = getRecentSuccessfulIpEntries(100);
+  const reusedWithinLast100 = recentSuccessfulEntries
     .filter(entry => entry.ip === resolvedIp)
     .slice(0, 10);
-  const reusedRecently = reusedWithinLast50.length > 0;
+  const reusedRecently = reusedWithinLast100.length > 0;
   if (duplicateWith.length) {
     status = "duplicate";
   }
@@ -1166,8 +1166,8 @@ function performDevicePublicIpCheck(serial, reason) {
     changedSinceLastPrep,
     duplicateWith,
     reusedRecently,
-    reusedWithinLast50,
-    last50History: recentSuccessfulEntries,
+    reusedWithinLast100,
+    last100History: recentSuccessfulEntries,
     lastError: "",
     lastReason: reason
   };
@@ -1186,7 +1186,7 @@ function performDevicePublicIpCheck(serial, reason) {
       reusedRecently
     },
     ...(history.entries || [])
-  ].slice(0, 50);
+  ].slice(0, 100);
   history.lastSuccessfulIp = resolvedIp;
   history.lastVerifiedAt = checkedAt;
   if (reason === "post-prep") {
@@ -1436,12 +1436,12 @@ function buildRoutingGuard(routingAudit) {
 }
 
 function normalizePublicIpState(serial, publicIp) {
-  const historyEntries = (ensureDeviceIpHistory(serial).entries || []).filter(entry => entry.ip).slice(0, 50);
+  const historyEntries = (ensureDeviceIpHistory(serial).entries || []).filter(entry => entry.ip).slice(0, 100);
   return {
     ...(publicIp || {}),
     reusedRecently: Boolean(publicIp?.reusedRecently),
-    reusedWithinLast50: publicIp?.reusedWithinLast50 || publicIp?.reusedWithinLast22 || [],
-    last50History: publicIp?.last50History || historyEntries
+    reusedWithinLast100: publicIp?.reusedWithinLast100 || publicIp?.reusedWithinLast50 || publicIp?.reusedWithinLast22 || [],
+    last100History: publicIp?.last100History || publicIp?.last50History || historyEntries
   };
 }
 
