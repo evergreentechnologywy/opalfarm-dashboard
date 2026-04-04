@@ -8,6 +8,8 @@ param(
 
   [string]$NodePath = "C:\Program Files\nodejs\node.exe",
 
+  [string]$DesktopAppPath = "",
+
   [int]$PhoneFarmPort = 7780
 )
 
@@ -24,9 +26,29 @@ function Test-Admin {
   return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Resolve-PhoneFarmDesktopPath {
+  param([string]$ConfiguredPath)
+
+  $candidates = @(
+    $ConfiguredPath,
+    "C:\Program Files\PhoneFarm\PhoneFarm.exe",
+    "C:\PhoneFarm\dist\win-unpacked\PhoneFarm.exe",
+    "C:\PhoneFarm\dist\PhoneFarm.exe"
+  ) | Where-Object { $_ }
+
+  foreach ($candidate in $candidates) {
+    if (Test-Path -LiteralPath $candidate) {
+      return $candidate
+    }
+  }
+
+  return $null
+}
+
 function Ensure-PhoneFarmStartup {
   param(
-    [string]$ResolvedNodePath
+    [string]$CommandPath,
+    [string]$Arguments = ""
   )
 
   $taskName = "PhoneFarm Dashboard AutoStart"
@@ -35,7 +57,11 @@ function Ensure-PhoneFarmStartup {
     schtasks /Delete /TN $taskName /F | Out-Null
   }
 
-  $taskCommand = ('"{0}" "{1}"' -f $ResolvedNodePath, "C:\PhoneFarm\server.js")
+  $taskCommand = if ($Arguments) {
+    ('"{0}" {1}' -f $CommandPath, $Arguments)
+  } else {
+    ('"{0}"' -f $CommandPath)
+  }
   schtasks /Create /TN $taskName /SC ONSTART /RL HIGHEST /TR $taskCommand /F | Out-Null
 }
 
@@ -82,14 +108,26 @@ if (-not (Test-Path -LiteralPath $NodePath)) {
   throw "Node was not found at $NodePath"
 }
 
+$resolvedDesktopAppPath = Resolve-PhoneFarmDesktopPath -ConfiguredPath $DesktopAppPath
+
 Write-Step "Creating PhoneFarm dashboard startup task"
-Ensure-PhoneFarmStartup -ResolvedNodePath $NodePath
+if ($resolvedDesktopAppPath) {
+  Write-Step ("Using desktop shell startup path " + $resolvedDesktopAppPath)
+  Ensure-PhoneFarmStartup -CommandPath $resolvedDesktopAppPath
+} else {
+  Write-Step "Desktop shell not found yet; using Node server startup"
+  Ensure-PhoneFarmStartup -CommandPath $NodePath -Arguments '"C:\PhoneFarm\server.js"'
+}
 
 Write-Step "Allowing PhoneFarm dashboard port through Windows Firewall"
 Ensure-PortFirewallRule -DisplayName "PhoneFarm Dashboard TCP $PhoneFarmPort" -Port $PhoneFarmPort
 
-Write-Step "Starting PhoneFarm dashboard"
-Start-Process -FilePath $NodePath -ArgumentList "C:\PhoneFarm\server.js" -WorkingDirectory "C:\PhoneFarm" | Out-Null
+Write-Step "Starting PhoneFarm"
+if ($resolvedDesktopAppPath) {
+  Start-Process -FilePath $resolvedDesktopAppPath -WorkingDirectory (Split-Path -Parent $resolvedDesktopAppPath) | Out-Null
+} else {
+  Start-Process -FilePath $NodePath -ArgumentList "C:\PhoneFarm\server.js" -WorkingDirectory "C:\PhoneFarm" | Out-Null
+}
 
 Write-Host ""
 Write-Host "Host PC setup completed."

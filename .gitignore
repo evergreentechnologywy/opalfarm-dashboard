@@ -1,4 +1,6 @@
 logs/
+node_modules/
+dist/
 phonefarm.pid
 config/state.json
 config/device-ip-history.json

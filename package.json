@@ -1,11 +1,40 @@
 {
   "name": "phonefarm-dashboard",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Local-first Android device dashboard for Windows",
-  "main": "server.js",
+  "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
-    "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\test-phonefarm-smoke.ps1"
+    "start:desktop": "electron .",
+    "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\test-phonefarm-smoke.ps1",
+    "dist:desktop": "electron-builder --win portable nsis"
+  },
+  "build": {
+    "appId": "com.phonefarm.desktop",
+    "productName": "PhoneFarm",
+    "files": [
+      "electron/**/*",
+      "web/**/*",
+      "scripts/**/*",
+      "android/**/*",
+      "config/**/*",
+      "server.js",
+      "package.json",
+      "README.md"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "portable",
+        "nsis"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^24.13.3"
   }
 }
