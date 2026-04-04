@@ -31,13 +31,13 @@ $settings = Get-Settings
 $baseUrl = "http://$($settings.host):$($settings.port)"
 
 $index = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/" -TimeoutSec 10
-$styles = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/styles.css?v=20260404b" -TimeoutSec 10
-$app = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/app.js?v=20260404b" -TimeoutSec 10
+$styles = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/styles.css?v=20260404c" -TimeoutSec 10
+$app = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/app.js?v=20260404c" -TimeoutSec 10
 $me = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/api/me" -TimeoutSec 10 | Select-Object -ExpandProperty Content | ConvertFrom-Json
 $status = Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/api/status" -TimeoutSec 15 | Select-Object -ExpandProperty Content | ConvertFrom-Json
 
 Assert-True ($index.StatusCode -eq 200) "Dashboard index did not return HTTP 200."
-Assert-True ($index.Content -match "PhoneFarm Dashboard v20260404b") "Dashboard HTML does not contain the expected build string."
+Assert-True ($index.Content -match "PhoneFarm Dashboard v20260404c") "Dashboard HTML does not contain the expected build string."
 Assert-True ($styles.StatusCode -eq 200) "Dashboard stylesheet did not return HTTP 200."
 Assert-True ($app.StatusCode -eq 200) "Dashboard app.js did not return HTTP 200."
 Assert-True ($me.ok -eq $true) "/api/me did not return ok=true."
@@ -49,7 +49,7 @@ Assert-True ($null -ne $status.devices) "/api/status is missing devices."
 
 [pscustomobject]@{
   BaseUrl = $baseUrl
-  Build = "20260404b"
+  Build = "20260404c"
   Devices = @($status.devices).Count
   RoutingBlocked = [bool]$status.routingGuard.blocked
   ActivePrep = if ($status.prepTelemetry.active) { $status.prepTelemetry.active.label } else { "" }

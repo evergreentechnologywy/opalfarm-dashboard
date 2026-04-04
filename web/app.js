@@ -52,6 +52,8 @@ const warningsOnlyToggle = document.getElementById("warningsOnlyToggle");
 const readyOnlyToggle = document.getElementById("readyOnlyToggle");
 const cardViewButton = document.getElementById("cardViewButton");
 const tableViewButton = document.getElementById("tableViewButton");
+const contextSummary = document.getElementById("contextSummary");
+const contextChips = document.getElementById("contextChips");
 const template = document.getElementById("deviceCardTemplate");
 
 let searchDebounce = 0;
@@ -186,6 +188,7 @@ function render() {
   syncControls();
   renderHeroGuard(data.routingGuard || {});
   renderSummaryStats(buildSummaryStats(data.devices || []));
+  renderContextBar(data.devices || [], visibleDevices);
   renderQueuePanel(data);
   renderActivityFeed(data.recentActivity || []);
   renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] }, data.routingGuard || {});
@@ -248,6 +251,32 @@ function renderSummaryStats(stats) {
     fragment.appendChild(button);
   }
   statsGrid.appendChild(fragment);
+}
+
+function renderContextBar(allDevices, visibleDevices) {
+  const hiddenCount = Math.max((allDevices || []).length - (visibleDevices || []).length, 0);
+  const modeLabel = state.viewMode === "table" ? "Table view" : "Card view";
+  const warningCount = (visibleDevices || []).filter(hasWarning).length;
+  contextSummary.textContent = `${visibleDevices.length} visible, ${hiddenCount} filtered out, ${warningCount} with warnings, ${modeLabel.toLowerCase()}.`;
+
+  contextChips.innerHTML = "";
+  const chips = [];
+  if (state.filters.search) chips.push(`Search: ${state.filters.search}`);
+  if (state.filters.status !== "all") chips.push(`Status: ${state.filters.status}`);
+  if (state.filters.role !== "all") chips.push(`Role: ${state.filters.role}`);
+  if (state.filters.warningsOnly) chips.push("Warnings only");
+  if (state.filters.readyOnly) chips.push("Ready only");
+  if (!chips.length) chips.push("All devices");
+  chips.push(modeLabel);
+
+  const fragment = document.createDocumentFragment();
+  for (const chipLabel of chips) {
+    const chip = document.createElement("div");
+    chip.className = "context-chip";
+    chip.textContent = chipLabel;
+    fragment.appendChild(chip);
+  }
+  contextChips.appendChild(fragment);
 }
 
 function applyQuickFilter(patch) {
