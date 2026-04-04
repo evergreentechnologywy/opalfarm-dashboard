@@ -13,6 +13,7 @@
   "build": {
     "appId": "com.phonefarm.desktop",
     "productName": "PhoneFarm",
+    "artifactName": "${productName} ${version}.${ext}",
     "files": [
       "electron/**/*",
       "web/**/*",
@@ -31,6 +32,11 @@
         "portable",
         "nsis"
       ]
+    },
+    "nsis": {
+      "shortcutName": "PhoneFarm",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   },
   "devDependencies": {
