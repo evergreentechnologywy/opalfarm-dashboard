@@ -411,6 +411,42 @@ h2 {
   font-weight: 700;
 }
 
+.quick-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.quick-actions-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.quick-actions-copy strong {
+  color: var(--heading);
+  font-size: 0.95rem;
+  letter-spacing: -0.02em;
+}
+
+.quick-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.quick-action-button {
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
 .toolbar-left,
 .toolbar-right {
   display: flex;
@@ -1022,7 +1058,16 @@ h2 {
     align-items: stretch;
   }
 
+  .quick-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
   .context-chips {
+    justify-content: flex-start;
+  }
+
+  .quick-actions-row {
     justify-content: flex-start;
   }
 }

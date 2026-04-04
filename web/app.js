@@ -54,6 +54,11 @@ const cardViewButton = document.getElementById("cardViewButton");
 const tableViewButton = document.getElementById("tableViewButton");
 const contextSummary = document.getElementById("contextSummary");
 const contextChips = document.getElementById("contextChips");
+const showAllButton = document.getElementById("showAllButton");
+const showReadyButton = document.getElementById("showReadyButton");
+const showWarningsButton = document.getElementById("showWarningsButton");
+const toggleViewButton = document.getElementById("toggleViewButton");
+const focusSearchButton = document.getElementById("focusSearchButton");
 const template = document.getElementById("deviceCardTemplate");
 
 let searchDebounce = 0;
@@ -85,6 +90,12 @@ readyOnlyToggle.addEventListener("change", event => {
 });
 cardViewButton.addEventListener("click", () => setViewMode("cards"));
 tableViewButton.addEventListener("click", () => setViewMode("table"));
+showAllButton.addEventListener("click", () => clearQuickFilters());
+showReadyButton.addEventListener("click", () => applyQuickFilter({ status: "ready", readyOnly: true, warningsOnly: false }));
+showWarningsButton.addEventListener("click", () => applyQuickFilter({ warningsOnly: true, readyOnly: false }));
+toggleViewButton.addEventListener("click", () => setViewMode(state.viewMode === "cards" ? "table" : "cards"));
+focusSearchButton.addEventListener("click", () => focusSearch());
+document.addEventListener("keydown", handleGlobalShortcut);
 
 render();
 refresh();
@@ -296,6 +307,58 @@ function clearQuickFilters() {
     readyOnly: false
   };
   render();
+}
+
+function focusSearch() {
+  searchInput.focus();
+  searchInput.select();
+}
+
+function handleGlobalShortcut(event) {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) {
+    return;
+  }
+
+  const target = event.target;
+  const editing = target && (
+    target.tagName === "INPUT" ||
+    target.tagName === "TEXTAREA" ||
+    target.tagName === "SELECT" ||
+    target.isContentEditable
+  );
+
+  if (event.key === "/" && !editing) {
+    event.preventDefault();
+    focusSearch();
+    return;
+  }
+
+  if (editing) {
+    return;
+  }
+
+  if (event.key === "v" || event.key === "V") {
+    event.preventDefault();
+    setViewMode(state.viewMode === "cards" ? "table" : "cards");
+    return;
+  }
+
+  if (event.key === "r" || event.key === "R") {
+    event.preventDefault();
+    refresh(true);
+    return;
+  }
+
+  if (event.key === "w" || event.key === "W") {
+    event.preventDefault();
+    applyQuickFilter({ warningsOnly: !state.filters.warningsOnly, readyOnly: false });
+    return;
+  }
+
+  if (event.key === "a" || event.key === "A") {
+    event.preventDefault();
+    clearQuickFilters();
+  }
 }
 
 function renderQueuePanel(data) {

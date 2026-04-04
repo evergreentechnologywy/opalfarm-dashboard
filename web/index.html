@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PhoneFarm Dashboard v20260404d</title>
+    <title>PhoneFarm Dashboard v20260404e</title>
     <script>
       (function setPhoneFarmBasePath() {
         const baseHref = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm/" : "/";
@@ -12,7 +12,7 @@
         document.head.appendChild(base);
       })();
     </script>
-    <link rel="stylesheet" href="styles.css?v=20260404d" />
+    <link rel="stylesheet" href="styles.css?v=20260404e" />
   </head>
   <body>
     <div class="shell-backdrop" aria-hidden="true">
@@ -26,7 +26,7 @@
           <p class="eyebrow">Internal Operations Console</p>
           <div class="brand-row">
             <h1>PhoneFarm</h1>
-            <span class="build-chip">Build 20260404d</span>
+            <span class="build-chip">Build 20260404e</span>
           </div>
           <p class="subtitle">Local device operations for prep, verification, control, and queue management across USB-connected Android phones.</p>
           <div class="hero-status-row">
@@ -93,6 +93,20 @@
           <strong id="contextSummary">Loading dashboard state</strong>
         </div>
         <div id="contextChips" class="context-chips"></div>
+      </section>
+
+      <section class="quick-actions panel">
+        <div class="quick-actions-copy">
+          <p class="context-label">Quick Actions</p>
+          <strong>Desktop-speed controls for filtering and switching views.</strong>
+        </div>
+        <div class="quick-actions-row">
+          <button id="showAllButton" class="button button-secondary quick-action-button" type="button">Show All</button>
+          <button id="showReadyButton" class="button button-secondary quick-action-button" type="button">Ready</button>
+          <button id="showWarningsButton" class="button button-secondary quick-action-button" type="button">Warnings</button>
+          <button id="toggleViewButton" class="button button-secondary quick-action-button" type="button">Toggle View</button>
+          <button id="focusSearchButton" class="button button-secondary quick-action-button" type="button">Focus Search</button>
+        </div>
       </section>
 
       <main class="dashboard-layout">
@@ -261,6 +275,6 @@
       </article>
     </template>
 
-    <script src="app.js?v=20260404d"></script>
+    <script src="app.js?v=20260404e"></script>
   </body>
 </html>
