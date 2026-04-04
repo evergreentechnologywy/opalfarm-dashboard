@@ -554,6 +554,29 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (action === "viewer-state") {
+    const current = state.devices?.[serial]?.viewerLaunch || buildMissingDevice(serial).viewerLaunch;
+    const sourceAction = String(body.sourceAction || current.sourceAction || "").trim();
+    const nextViewerLaunch = {
+      ...current,
+      status: String(body.status || current.status || "unknown"),
+      sourceAction,
+      requestedAt: String(body.requestedAt || current.requestedAt || new Date().toISOString()),
+      confirmedAt: String(body.confirmedAt || current.confirmedAt || ""),
+      pid: Number.isFinite(Number(body.pid)) ? Number(body.pid) : (current.pid || null),
+      processName: String(body.processName || current.processName || ""),
+      filePath: String(body.filePath || current.filePath || ""),
+      aliveAfterLaunch: body.aliveAfterLaunch === undefined ? Boolean(current.aliveAfterLaunch) : Boolean(body.aliveAfterLaunch),
+      windowReady: body.windowReady === undefined ? Boolean(current.windowReady) : Boolean(body.windowReady),
+      fallbackViewer: String(body.fallbackViewer || current.fallbackViewer || ""),
+      manualSelectionRequired: body.manualSelectionRequired === undefined ? Boolean(current.manualSelectionRequired) : Boolean(body.manualSelectionRequired),
+      lastError: String(body.lastError || "")
+    };
+    updateDeviceState(serial, { viewerLaunch: nextViewerLaunch });
+    logActivity("scrcpy", `Viewer state synced by ${user.username} for ${sourceAction || "desktop"}: ${nextViewerLaunch.status}`, serial);
+    return sendJson(res, 200, { ok: true, viewerLaunch: nextViewerLaunch });
+  }
+
   if (action === "open-control") {
     const launchResult = await launchViewerForDevice(serial, user.username, "open-control");
     if (!launchResult.success) {
@@ -620,6 +643,11 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     const verification = await runDevicePublicIpCheck(serial, "pre-session");
     if (!verification.success) {
       return sendJson(res, 409, { error: verification.error || "IP verification failed; session not started" });
+    }
+    if (body && body.skipViewerLaunch) {
+      updateDeviceState(serial, { sessionState: "running", sessionStartedAt: new Date().toISOString() });
+      logActivity("session", `Session started by ${user.username} with desktop-managed viewer launch`, serial);
+      return sendJson(res, 200, { ok: true, desktopLaunchPending: true, viewerLaunch: state.devices?.[serial]?.viewerLaunch || null });
     }
     const launchResult = await launchViewerForDevice(serial, user.username, "start-session");
     if (!launchResult.success) {

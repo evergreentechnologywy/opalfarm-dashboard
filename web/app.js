@@ -17,6 +17,8 @@ const state = {
   }
 };
 
+const desktopBridge = window.phoneFarmDesktop || null;
+
 const BASE_PATH = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm" : "";
 
 const appShell = document.getElementById("appShell");
@@ -619,6 +621,12 @@ async function invokeDeviceAction(serial, action, body = {}) {
   render();
 
   try {
+    if (desktopBridge?.isDesktopApp && (action === "open-control" || action === "start-session")) {
+      await invokeDesktopViewerAction(serial, action, body);
+      await refresh();
+      return;
+    }
+
     const response = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/${action}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -638,6 +646,53 @@ async function invokeDeviceAction(serial, action, body = {}) {
   } finally {
     delete state.pendingActions[pendingKey];
     render();
+  }
+}
+
+async function invokeDesktopViewerAction(serial, action, body = {}) {
+  if (action === "start-session") {
+    const startResponse = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/start-session`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      body: JSON.stringify({ ...body, skipViewerLaunch: true })
+    });
+
+    if (!startResponse.ok) {
+      const error = await startResponse.json().catch(() => ({ error: "Session start failed" }));
+      throw new Error(error.error || "Session start failed");
+    }
+  }
+
+  try {
+    const nativeLaunch = await desktopBridge.launchViewer(serial);
+    await desktopBridge.syncViewerState({
+      serial,
+      sourceAction: action,
+      status: nativeLaunch.fallbackViewer ? "fallback" : (nativeLaunch.windowReady ? "confirmed" : "unverified"),
+      requestedAt: new Date().toISOString(),
+      confirmedAt: nativeLaunch.startedAt || new Date().toISOString(),
+      pid: nativeLaunch.pid || null,
+      processName: nativeLaunch.processName || "",
+      filePath: nativeLaunch.filePath || "",
+      aliveAfterLaunch: Boolean(nativeLaunch.aliveAfterLaunch),
+      windowReady: Boolean(nativeLaunch.windowReady),
+      fallbackViewer: nativeLaunch.fallbackViewer || "",
+      manualSelectionRequired: Boolean(nativeLaunch.manualSelectionRequired),
+      lastError: nativeLaunch.fallbackViewer ? (nativeLaunch.scrcpyError || "") : ""
+    });
+  } catch (error) {
+    if (action === "start-session") {
+      await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/stop-session`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify({})
+      }).catch(() => undefined);
+    }
+    throw error;
   }
 }
 

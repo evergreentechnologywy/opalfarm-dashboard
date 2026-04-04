@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell, ipcMain } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const http = require("http");
@@ -10,6 +10,40 @@ const DEFAULT_WORKSPACE_ROOT = "C:\\PhoneFarm";
 let mainWindow = null;
 let serverProcess = null;
 let serverOwnedByDesktop = false;
+
+function getCliArg(name) {
+  const prefix = `${name}=`;
+  const match = process.argv.find(arg => String(arg).startsWith(prefix));
+  return match ? String(match).slice(prefix.length) : "";
+}
+
+function getDesktopTestSpec() {
+  const openControlSerial = getCliArg("--phonefarm-test-open-control");
+  const startSessionSerial = getCliArg("--phonefarm-test-start-session");
+  const action = openControlSerial ? "open-control" : (startSessionSerial ? "start-session" : "");
+  const serial = openControlSerial || startSessionSerial;
+  if (!action || !serial) {
+    return null;
+  }
+
+  return {
+    action,
+    serial,
+    outputPath: getCliArg("--phonefarm-test-output"),
+    exitWhenDone: process.argv.includes("--phonefarm-test-exit")
+  };
+}
+
+function writeDesktopLog(root, message) {
+  try {
+    const logDir = path.join(root, "logs");
+    fs.mkdirSync(logDir, { recursive: true });
+    const line = `[${new Date().toISOString()}] ${message}\n`;
+    fs.appendFileSync(path.join(logDir, "desktop-shell.log"), line);
+  } catch (error) {
+    // Ignore logging failures.
+  }
+}
 
 function pathExists(targetPath) {
   try {
@@ -98,8 +132,67 @@ function resolveNodeCommand(settings) {
   return candidates[0];
 }
 
+function runPowerShellJson(scriptPath, scriptArgs = []) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...scriptArgs], {
+      windowsHide: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.on("data", chunk => {
+      stdout += chunk.toString();
+    });
+
+    child.stderr.on("data", chunk => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", reject);
+    child.on("exit", code => {
+      const trimmed = String(stdout || "").trim();
+      let payload = null;
+      if (trimmed) {
+        const lines = trimmed.split(/\r?\n/).filter(Boolean);
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          try {
+            payload = JSON.parse(lines[index]);
+            break;
+          } catch (error) {
+            // Scan for the last JSON object line.
+          }
+        }
+      }
+
+      if (code === 0) {
+        resolve(payload || {});
+        return;
+      }
+
+      const message = payload?.error || stderr.trim() || `PowerShell script exited with code ${code}`;
+      reject(new Error(message));
+    });
+  });
+}
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `Request failed: ${response.status}`);
+  }
+  return payload;
+}
+
 async function ensureServer(context) {
   if (await checkServer(context.baseUrl)) {
+    writeDesktopLog(context.root, `Reused running server at ${context.baseUrl}`);
     return context.baseUrl;
   }
 
@@ -116,10 +209,12 @@ async function ensureServer(context) {
   });
 
   serverProcess.on("error", error => {
+    writeDesktopLog(context.root, `Server start failed: ${error.message}`);
     dialog.showErrorBox("PhoneFarm Server Start Failed", error.message);
   });
 
   await waitForServer(context.baseUrl, START_TIMEOUT_MS);
+  writeDesktopLog(context.root, `Started desktop-owned server at ${context.baseUrl}`);
   return context.baseUrl;
 }
 
@@ -136,7 +231,8 @@ function createWindow(baseUrl) {
     webPreferences: {
       contextIsolation: true,
       sandbox: false,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: path.join(__dirname, "preload.js")
     }
   });
 
@@ -149,14 +245,145 @@ function createWindow(baseUrl) {
     return { action: "deny" };
   });
 
+  mainWindow.webContents.on("did-finish-load", async () => {
+    try {
+      const bridgeReady = await mainWindow.webContents.executeJavaScript("Boolean(window.phoneFarmDesktop && window.phoneFarmDesktop.isDesktopApp)", true);
+      const context = getWorkspaceContext();
+      writeDesktopLog(context.root, `Renderer loaded ${baseUrl}; desktop bridge ready=${bridgeReady}`);
+    } catch (error) {
+      const context = getWorkspaceContext();
+      writeDesktopLog(context.root, `Renderer bridge check failed: ${error.message}`);
+    }
+  });
+
   mainWindow.loadURL(baseUrl);
 }
+
+async function callRendererBridge(methodName, arg) {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    throw new Error("Desktop window is not available");
+  }
+
+  const serializedArg = JSON.stringify(arg);
+  const script = `(async () => {
+    if (!window.phoneFarmDesktop || typeof window.phoneFarmDesktop.${methodName} !== "function") {
+      throw new Error("Desktop bridge method ${methodName} is not available");
+    }
+    return await window.phoneFarmDesktop.${methodName}(${serializedArg});
+  })()`;
+
+  return mainWindow.webContents.executeJavaScript(script, true);
+}
+
+async function runDesktopViewerAction(testSpec, context) {
+  const requestedAt = new Date().toISOString();
+  const result = {
+    ok: false,
+    action: testSpec.action,
+    serial: testSpec.serial,
+    requestedAt,
+    baseUrl: context.baseUrl,
+    bridgeReady: false
+  };
+
+  try {
+    result.bridgeReady = await mainWindow.webContents.executeJavaScript("Boolean(window.phoneFarmDesktop && window.phoneFarmDesktop.isDesktopApp)", true);
+    if (!result.bridgeReady) {
+      throw new Error("Desktop bridge is not available in the renderer");
+    }
+
+    if (testSpec.action === "start-session") {
+      result.startSession = await postJson(`${context.baseUrl}/api/devices/${encodeURIComponent(testSpec.serial)}/start-session`, {
+        skipViewerLaunch: true
+      });
+    }
+
+    result.nativeLaunch = await callRendererBridge("launchViewer", testSpec.serial);
+    const syncPayload = {
+      serial: testSpec.serial,
+      sourceAction: testSpec.action,
+      status: result.nativeLaunch?.fallbackViewer ? "fallback" : (result.nativeLaunch?.windowReady ? "confirmed" : "unverified"),
+      requestedAt,
+      confirmedAt: result.nativeLaunch?.startedAt || new Date().toISOString(),
+      pid: result.nativeLaunch?.pid || null,
+      processName: result.nativeLaunch?.processName || "",
+      filePath: result.nativeLaunch?.filePath || "",
+      aliveAfterLaunch: Boolean(result.nativeLaunch?.aliveAfterLaunch),
+      windowReady: Boolean(result.nativeLaunch?.windowReady),
+      fallbackViewer: result.nativeLaunch?.fallbackViewer || "",
+      manualSelectionRequired: Boolean(result.nativeLaunch?.manualSelectionRequired),
+      lastError: result.nativeLaunch?.fallbackViewer ? (result.nativeLaunch?.scrcpyError || "") : ""
+    };
+    result.syncResult = await callRendererBridge("syncViewerState", syncPayload);
+    result.ok = true;
+    writeDesktopLog(context.root, `Desktop viewer action ${testSpec.action} completed for ${testSpec.serial}: ${syncPayload.status}`);
+  } catch (error) {
+    result.error = error.message;
+    writeDesktopLog(context.root, `Desktop viewer action ${testSpec.action} failed for ${testSpec.serial}: ${error.message}`);
+    if (testSpec.action === "start-session") {
+      try {
+        result.rollback = await postJson(`${context.baseUrl}/api/devices/${encodeURIComponent(testSpec.serial)}/stop-session`, {});
+      } catch (rollbackError) {
+        result.rollbackError = rollbackError.message;
+      }
+    }
+  }
+
+  if (testSpec.outputPath) {
+    fs.writeFileSync(testSpec.outputPath, `${JSON.stringify(result, null, 2)}\n`);
+  }
+
+  return result;
+}
+
+async function maybeRunDesktopTest(context) {
+  const testSpec = getDesktopTestSpec();
+  if (!testSpec) {
+    return;
+  }
+
+  const run = async () => {
+    await new Promise(resolve => setTimeout(resolve, 800));
+    await runDesktopViewerAction(testSpec, context);
+    if (testSpec.exitWhenDone) {
+      setTimeout(() => app.quit(), 600);
+    }
+  };
+
+  mainWindow.webContents.once("did-finish-load", () => {
+    run().catch(error => {
+      writeDesktopLog(context.root, `Desktop test runner failed: ${error.message}`);
+      if (testSpec.outputPath) {
+        fs.writeFileSync(testSpec.outputPath, `${JSON.stringify({ ok: false, action: testSpec.action, serial: testSpec.serial, error: error.message }, null, 2)}\n`);
+      }
+      if (testSpec.exitWhenDone) {
+        setTimeout(() => app.quit(), 600);
+      }
+    });
+  });
+}
+
+ipcMain.handle("phonefarm:launch-viewer", async (_event, { serial }) => {
+  const context = getWorkspaceContext();
+  const scriptPath = path.join(context.root, "scripts", "open-scrcpy-for-device.ps1");
+  return runPowerShellJson(scriptPath, ["-Serial", String(serial)]);
+});
+
+ipcMain.handle("phonefarm:sync-viewer-state", async (_event, payload) => {
+  const context = getWorkspaceContext();
+  const serial = String(payload?.serial || "");
+  if (!serial) {
+    throw new Error("serial is required");
+  }
+  return postJson(`${context.baseUrl}/api/devices/${encodeURIComponent(serial)}/viewer-state`, payload);
+});
 
 async function bootstrap() {
   try {
     const context = getWorkspaceContext();
     const baseUrl = await ensureServer(context);
     createWindow(baseUrl);
+    maybeRunDesktopTest(context);
   } catch (error) {
     dialog.showErrorBox("PhoneFarm Startup Failed", error.message);
     app.quit();
