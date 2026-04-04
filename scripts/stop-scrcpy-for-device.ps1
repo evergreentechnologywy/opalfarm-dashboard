@@ -2,7 +2,7 @@ param(
   [Parameter(Mandatory = $true)]
   [string]$Serial,
 
-  [int]$Pid = 0
+  [int]$ViewerPid = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,8 +22,8 @@ function Write-ActivityLog {
   Add-Content -Path $activityLogPath -Value "[$timestamp] [$Category]$serialSegment $Message"
 }
 
-if ($Pid -gt 0) {
-  $directProcess = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+if ($ViewerPid -gt 0) {
+  $directProcess = Get-Process -Id $ViewerPid -ErrorAction SilentlyContinue
   if ($directProcess) {
     Stop-Process -Id $directProcess.Id -Force
     Write-ActivityLog -Category "scrcpy" -Message ("Stopped scrcpy process " + $directProcess.Id + " from recorded PID") -DeviceSerial $Serial
@@ -31,7 +31,7 @@ if ($Pid -gt 0) {
   }
 }
 
-$windowTitle = "PhoneFarm $Serial"
+$windowTitle = "PhoneFarm-$Serial"
 $candidates = @(Get-Process -Name "scrcpy" -ErrorAction SilentlyContinue | Where-Object {
   try {
     $_.MainWindowTitle -eq $windowTitle

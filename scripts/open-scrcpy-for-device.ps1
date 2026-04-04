@@ -99,13 +99,62 @@ function Get-ScrcpyProcesses {
   })
 }
 
+function Get-ScrcpyProcessSnapshot {
+  param(
+    [string]$ExpectedPath,
+    [string]$DeviceSerial,
+    [string]$ExpectedWindowTitle
+  )
+
+  $cimProcesses = @(Get-CimInstance Win32_Process -Filter "Name = 'scrcpy.exe'" -ErrorAction SilentlyContinue)
+  $processMap = @{}
+  foreach ($process in @(Get-ScrcpyProcesses -ExpectedPath $ExpectedPath)) {
+    $processMap[[string]$process.Id] = $process
+  }
+
+  $snapshots = @()
+  foreach ($cimProcess in $cimProcesses) {
+    $commandLine = [string]$cimProcess.CommandLine
+    $pathOk = -not $ExpectedPath -or ([string]$cimProcess.ExecutablePath -eq $ExpectedPath)
+    $serialMatch = $commandLine -match [regex]::Escape($DeviceSerial)
+    $titleMatch = $commandLine -match [regex]::Escape($ExpectedWindowTitle)
+    if (-not $pathOk -or (-not $serialMatch -and -not $titleMatch)) {
+      continue
+    }
+
+    $liveProcess = $processMap[[string]$cimProcess.ProcessId]
+    if (-not $liveProcess) {
+      try {
+        $liveProcess = Get-Process -Id $cimProcess.ProcessId -ErrorAction Stop
+      }
+      catch {
+        $liveProcess = $null
+      }
+    }
+
+    if ($liveProcess) {
+      $resolvedPath = if ($ExpectedPath) { $ExpectedPath } else { [string]$cimProcess.ExecutablePath }
+      $snapshots += [pscustomobject]@{
+        Id = $liveProcess.Id
+        ProcessName = $liveProcess.ProcessName
+        Path = $resolvedPath
+        CommandLine = $commandLine
+        MainWindowHandle = [int64]$liveProcess.MainWindowHandle
+        MainWindowTitle = [string]$liveProcess.MainWindowTitle
+      }
+    }
+  }
+
+  return @($snapshots | Sort-Object Id -Unique)
+}
+
 $settings = Get-Settings
 $adbPath = Resolve-ToolPath -ConfiguredPath $settings.adbPath -FallbackName "adb"
 $scrcpyPath = Resolve-ToolPath -ConfiguredPath $settings.scrcpyPath -FallbackName "scrcpy"
 $defaultVysorPath = Join-Path $env:LOCALAPPDATA "vysor\\Vysor.exe"
 $vysorPath = if ($settings.vysorPath) { $settings.vysorPath } elseif (Test-Path -LiteralPath $defaultVysorPath) { $defaultVysorPath } else { "" }
 $workingDirectory = Split-Path -Parent $scrcpyPath
-$windowTitle = "PhoneFarm $Serial"
+$windowTitle = "PhoneFarm-$Serial"
 
 try {
   if (-not (Test-Path -LiteralPath $scrcpyPath)) {
@@ -117,34 +166,59 @@ try {
     throw "ADB did not report the target device as ready. State=$($deviceState.Output.Trim())"
   }
 
-  $launchArgs = @("--serial", $Serial, "--no-audio", "--window-title", $windowTitle)
+  $launchArgs = @("--serial=$Serial", "--no-audio", "--window-title=$windowTitle")
   $result = $null
 
   for ($attempt = 1; $attempt -le 2; $attempt += 1) {
     $beforeIds = @((Get-ScrcpyProcesses -ExpectedPath $scrcpyPath | ForEach-Object { $_.Id }))
     Write-ActivityLog -Category "scrcpy" -Message ("Launching scrcpy attempt $attempt via " + $scrcpyPath) -DeviceSerial $Serial
-    Start-Process -FilePath $scrcpyPath -WorkingDirectory $workingDirectory -ArgumentList $launchArgs | Out-Null
+    $startedProcess = Start-Process -FilePath $scrcpyPath -WorkingDirectory $workingDirectory -ArgumentList $launchArgs -PassThru
+    $startedPid = if ($startedProcess) { $startedProcess.Id } else { 0 }
 
-    $deadline = (Get-Date).AddSeconds(10)
+    $deadline = (Get-Date).AddSeconds(12)
     do {
       Start-Sleep -Milliseconds 350
-      $candidates = @(Get-ScrcpyProcesses -ExpectedPath $scrcpyPath | Where-Object { $_.Id -notin $beforeIds })
+      $candidates = @()
+
+      if ($startedPid -gt 0) {
+        try {
+          $directProcess = Get-Process -Id $startedPid -ErrorAction Stop
+          $candidates += [pscustomobject]@{
+            Id = $directProcess.Id
+            ProcessName = $directProcess.ProcessName
+            Path = $scrcpyPath
+            CommandLine = ""
+            MainWindowHandle = [int64]$directProcess.MainWindowHandle
+            MainWindowTitle = [string]$directProcess.MainWindowTitle
+          }
+        }
+        catch {
+          # The direct process may exit quickly; fall back to serial-specific discovery below.
+        }
+      }
+
+      $candidates += @(Get-ScrcpyProcessSnapshot -ExpectedPath $scrcpyPath -DeviceSerial $Serial -ExpectedWindowTitle $windowTitle | Where-Object { $_.Id -notin $beforeIds })
+      $candidates = @($candidates | Sort-Object Id -Unique)
       foreach ($candidate in $candidates) {
-        $result = [pscustomobject]@{
+        $matchedBy = if ($candidate.CommandLine) { "command-line" } elseif ($candidate.Id -eq $startedPid) { "started-pid" } else { "process-scan" }
+        $candidateResult = [pscustomobject]@{
           ok = $true
           serial = $Serial
           pid = $candidate.Id
           processName = $candidate.ProcessName
-          filePath = $scrcpyPath
+          filePath = $candidate.Path
           startedAt = (Get-Date).ToString("o")
           aliveAfterLaunch = $true
           mainWindowHandle = [int64]$candidate.MainWindowHandle
           mainWindowTitle = [string]$candidate.MainWindowTitle
           windowReady = [bool]($candidate.MainWindowHandle -ne 0)
           attempt = $attempt
+          matchedBy = $matchedBy
         }
 
-        if ($result.windowReady -or $attempt -eq 2) {
+        $result = $candidateResult
+
+        if ($candidateResult.windowReady -or ((Get-Date) -ge $deadline) -or $attempt -eq 2) {
           break
         }
       }
@@ -195,12 +269,13 @@ try {
     throw $scrcpyFailure
   }
 
-  Write-ActivityLog -Category "scrcpy" -Message ("scrcpy detected with PID " + $result.pid + "; windowReady=" + $result.windowReady + "; attempt=" + $result.attempt) -DeviceSerial $Serial
+  Write-ActivityLog -Category "scrcpy" -Message ("scrcpy detected with PID " + $result.pid + "; windowReady=" + $result.windowReady + "; attempt=" + $result.attempt + "; matchedBy=" + $result.matchedBy) -DeviceSerial $Serial
   $result | ConvertTo-Json -Compress
   exit 0
 }
 catch {
-  $message = $_.Exception.Message
+  $lineNumber = $_.InvocationInfo.ScriptLineNumber
+  $message = if ($lineNumber) { "$($_.Exception.Message) (line $lineNumber)" } else { $_.Exception.Message }
   Write-ActivityLog -Category "scrcpy" -Message ("scrcpy launch failed: " + $message) -DeviceSerial $Serial
   [pscustomobject]@{
     ok = $false

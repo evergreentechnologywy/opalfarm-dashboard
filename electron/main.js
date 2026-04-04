@@ -7,6 +7,9 @@ const { spawn } = require("child_process");
 const START_TIMEOUT_MS = 25000;
 const DEFAULT_WORKSPACE_ROOT = "C:\\PhoneFarm";
 
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+
 let mainWindow = null;
 let serverProcess = null;
 let serverOwnedByDesktop = false;
@@ -232,6 +235,7 @@ function createWindow(baseUrl) {
       contextIsolation: true,
       sandbox: false,
       nodeIntegration: false,
+      backgroundThrottling: false,
       preload: path.join(__dirname, "preload.js")
     }
   });

@@ -14,7 +14,9 @@ const state = {
     role: "all",
     warningsOnly: false,
     readyOnly: false
-  }
+  },
+  userLoaded: false,
+  refreshInFlight: false
 };
 
 const desktopBridge = window.phoneFarmDesktop || null;
@@ -52,11 +54,16 @@ const cardViewButton = document.getElementById("cardViewButton");
 const tableViewButton = document.getElementById("tableViewButton");
 const template = document.getElementById("deviceCardTemplate");
 
+let searchDebounce = 0;
+
 logoutButton.addEventListener("click", handleLogout);
 refreshButton.addEventListener("click", () => refresh(true));
 searchInput.addEventListener("input", event => {
-  state.filters.search = event.target.value.trim().toLowerCase();
-  render();
+  clearTimeout(searchDebounce);
+  searchDebounce = setTimeout(() => {
+    state.filters.search = event.target.value.trim().toLowerCase();
+    render();
+  }, 120);
 });
 statusFilter.addEventListener("change", event => {
   state.filters.status = event.target.value;
@@ -87,31 +94,17 @@ setInterval(() => {
 }, 4000);
 
 setInterval(() => {
-  if (state.data) {
-    render();
-  } else {
-    liveClock.textContent = formatNow();
-  }
+  liveClock.textContent = formatNow();
 }, 1000);
 
 async function refresh(showToast = false) {
-  try {
-    const meResponse = await fetch(apiPath("/api/me"), {
-      credentials: "same-origin",
-      cache: "no-store"
-    });
-    if (meResponse.status === 401) {
-      state.user = null;
-      state.data = null;
-      render();
-      return;
-    }
-    if (!meResponse.ok) {
-      throw new Error(`Login session check failed (${meResponse.status})`);
-    }
+  if (state.refreshInFlight) {
+    return;
+  }
 
-    const mePayload = await meResponse.json();
-    state.user = mePayload.user;
+  state.refreshInFlight = true;
+  try {
+    await ensureUserLoaded();
 
     const response = await fetch(apiPath("/api/status"), {
       credentials: "same-origin",
@@ -132,7 +125,35 @@ async function refresh(showToast = false) {
     }
   } catch (error) {
     window.alert(error.message || "Dashboard refresh failed.");
+  } finally {
+    state.refreshInFlight = false;
   }
+}
+
+async function ensureUserLoaded(force = false) {
+  if (state.userLoaded && !force) {
+    return state.user;
+  }
+
+  const meResponse = await fetch(apiPath("/api/me"), {
+    credentials: "same-origin",
+    cache: "no-store"
+  });
+  if (meResponse.status === 401) {
+    state.user = null;
+    state.userLoaded = false;
+    state.data = null;
+    render();
+    throw new Error("Authentication required");
+  }
+  if (!meResponse.ok) {
+    throw new Error(`Login session check failed (${meResponse.status})`);
+  }
+
+  const mePayload = await meResponse.json();
+  state.user = mePayload.user;
+  state.userLoaded = true;
+  return state.user;
 }
 
 function setViewMode(mode) {
@@ -145,6 +166,7 @@ function setViewMode(mode) {
 
 async function handleLogout() {
   await fetch(apiPath("/api/logout"), { method: "POST", credentials: "same-origin", cache: "no-store" });
+  state.userLoaded = false;
   await refresh();
 }
 

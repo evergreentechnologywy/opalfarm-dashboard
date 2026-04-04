@@ -662,7 +662,7 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     const viewerPid = state.devices?.[serial]?.viewerLaunch?.pid;
     const stopArgs = ["-Serial", serial];
     if (viewerPid) {
-      stopArgs.push("-Pid", String(viewerPid));
+      stopArgs.push("-ViewerPid", String(viewerPid));
     }
     runPowerShellScript("stop-scrcpy-for-device.ps1", stopArgs, { detached: true, windowsHide: false });
     updateDeviceState(serial, { sessionState: "stopped", sessionStoppedAt: new Date().toISOString() });
