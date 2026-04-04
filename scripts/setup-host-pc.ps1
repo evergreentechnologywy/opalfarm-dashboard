@@ -29,16 +29,24 @@ function Test-Admin {
 function Resolve-PhoneFarmDesktopPath {
   param([string]$ConfiguredPath)
 
-  $candidates = @(
-    $ConfiguredPath,
-    "C:\Program Files\PhoneFarm\PhoneFarm.exe",
-    "C:\PhoneFarm\dist\win-unpacked\PhoneFarm.exe",
-    "C:\PhoneFarm\dist\PhoneFarm.exe"
-  ) | Where-Object { $_ }
+  $candidates = @($ConfiguredPath, "C:\Program Files\PhoneFarm\PhoneFarm.exe", "C:\PhoneFarm\dist\PhoneFarm.exe") | Where-Object { $_ }
 
   foreach ($candidate in $candidates) {
     if (Test-Path -LiteralPath $candidate) {
       return $candidate
+    }
+  }
+
+  $distDir = "C:\PhoneFarm\dist"
+  if (Test-Path -LiteralPath $distDir) {
+    $unpackedMatch = Get-ChildItem -Path $distDir -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like "win-*-unpacked" } |
+      ForEach-Object { Join-Path $_.FullName "PhoneFarm.exe" } |
+      Where-Object { Test-Path -LiteralPath $_ } |
+      Select-Object -First 1
+
+    if ($unpackedMatch) {
+      return $unpackedMatch
     }
   }
 

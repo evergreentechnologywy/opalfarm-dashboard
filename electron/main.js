@@ -4,28 +4,55 @@ const fs = require("fs");
 const http = require("http");
 const { spawn } = require("child_process");
 
-const ROOT = path.join(__dirname, "..");
-const SETTINGS_PATH = path.join(ROOT, "config", "settings.json");
-const DEFAULT_URL = "http://127.0.0.1:7780";
 const START_TIMEOUT_MS = 25000;
+const DEFAULT_WORKSPACE_ROOT = "C:\\PhoneFarm";
 
 let mainWindow = null;
 let serverProcess = null;
 let serverOwnedByDesktop = false;
 
-function loadSettings() {
+function pathExists(targetPath) {
   try {
-    return JSON.parse(fs.readFileSync(SETTINGS_PATH, "utf8"));
+    return fs.existsSync(targetPath);
   } catch (error) {
-    return { host: "127.0.0.1", port: 7780 };
+    return false;
   }
 }
 
-function getBaseUrl() {
-  const settings = loadSettings();
-  const host = settings.host || "127.0.0.1";
-  const port = Number(settings.port) || 7780;
-  return `http://${host}:${port}`;
+function resolveWorkspaceRoot() {
+  const candidates = [
+    process.env.PHONEFARM_ROOT,
+    DEFAULT_WORKSPACE_ROOT,
+    path.join(__dirname, "..")
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    if (pathExists(path.join(candidate, "server.js")) && pathExists(path.join(candidate, "config", "settings.json"))) {
+      return candidate;
+    }
+  }
+
+  throw new Error("PhoneFarm workspace was not found. Expected C:\\PhoneFarm or PHONEFARM_ROOT.");
+}
+
+function getWorkspaceContext() {
+  const root = resolveWorkspaceRoot();
+  const settingsPath = path.join(root, "config", "settings.json");
+  let settings = { host: "127.0.0.1", port: 7780, nodePath: "" };
+
+  try {
+    settings = { ...settings, ...JSON.parse(fs.readFileSync(settingsPath, "utf8")) };
+  } catch (error) {
+    // Keep defaults when settings are not readable.
+  }
+
+  return {
+    root,
+    settingsPath,
+    settings,
+    baseUrl: `http://${settings.host || "127.0.0.1"}:${Number(settings.port) || 7780}`,
+    serverScript: path.join(root, "server.js")
+  };
 }
 
 function checkServer(url) {
@@ -60,18 +87,25 @@ function waitForServer(url, timeoutMs) {
   });
 }
 
-async function ensureServer() {
-  const baseUrl = getBaseUrl();
-  if (await checkServer(baseUrl)) {
-    return baseUrl;
+function resolveNodeCommand(settings) {
+  const candidates = [
+    process.env.PHONEFARM_NODE_PATH,
+    settings.nodePath,
+    "C:\\Program Files\\nodejs\\node.exe",
+    "node"
+  ].filter(Boolean);
+
+  return candidates[0];
+}
+
+async function ensureServer(context) {
+  if (await checkServer(context.baseUrl)) {
+    return context.baseUrl;
   }
 
-  const nodeExe = process.execPath.toLowerCase().includes("electron.exe")
-    ? "node"
-    : process.execPath;
-
-  serverProcess = spawn(nodeExe, ["server.js"], {
-    cwd: ROOT,
+  const nodeCommand = resolveNodeCommand(context.settings);
+  serverProcess = spawn(nodeCommand, [context.serverScript], {
+    cwd: context.root,
     windowsHide: false,
     stdio: "ignore"
   });
@@ -81,8 +115,12 @@ async function ensureServer() {
     serverProcess = null;
   });
 
-  await waitForServer(baseUrl, START_TIMEOUT_MS);
-  return baseUrl;
+  serverProcess.on("error", error => {
+    dialog.showErrorBox("PhoneFarm Server Start Failed", error.message);
+  });
+
+  await waitForServer(context.baseUrl, START_TIMEOUT_MS);
+  return context.baseUrl;
 }
 
 function createWindow(baseUrl) {
@@ -116,7 +154,8 @@ function createWindow(baseUrl) {
 
 async function bootstrap() {
   try {
-    const baseUrl = await ensureServer();
+    const context = getWorkspaceContext();
+    const baseUrl = await ensureServer(context);
     createWindow(baseUrl);
   } catch (error) {
     dialog.showErrorBox("PhoneFarm Startup Failed", error.message);
@@ -124,7 +163,21 @@ async function bootstrap() {
   }
 }
 
-app.whenReady().then(bootstrap);
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+
+  app.whenReady().then(bootstrap);
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
@@ -134,8 +187,12 @@ app.on("window-all-closed", () => {
 
 app.on("activate", async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
-    const baseUrl = getBaseUrl();
-    createWindow(baseUrl);
+    try {
+      const context = getWorkspaceContext();
+      createWindow(context.baseUrl);
+    } catch (error) {
+      dialog.showErrorBox("PhoneFarm Activate Failed", error.message);
+    }
   }
 });
 
