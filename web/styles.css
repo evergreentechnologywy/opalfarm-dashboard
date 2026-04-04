@@ -365,6 +365,7 @@ h2 {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 14px;
   padding: 14px 16px;
@@ -375,6 +376,7 @@ h2 {
 .context-copy {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .context-label {
@@ -389,6 +391,8 @@ h2 {
   color: var(--heading);
   font-size: 0.95rem;
   letter-spacing: -0.02em;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .context-chips {
@@ -396,6 +400,7 @@ h2 {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 .context-chip {
@@ -409,12 +414,16 @@ h2 {
   color: var(--text-muted);
   font-size: 0.78rem;
   font-weight: 700;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .quick-actions {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 14px;
   padding: 14px 16px;
@@ -425,12 +434,15 @@ h2 {
 .quick-actions-copy {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
 
 .quick-actions-copy strong {
   color: var(--heading);
   font-size: 0.95rem;
   letter-spacing: -0.02em;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .quick-actions-row {
@@ -438,6 +450,7 @@ h2 {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
 }
 
 .quick-action-button {
@@ -445,6 +458,8 @@ h2 {
   padding: 0 14px;
   border-radius: 999px;
   font-size: 0.8rem;
+  max-width: 100%;
+  white-space: normal;
 }
 
 .toolbar-left,
@@ -453,6 +468,7 @@ h2 {
   align-items: flex-end;
   gap: 12px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
 .search-field,
@@ -565,8 +581,13 @@ h2 {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 14px;
   margin-bottom: 14px;
+}
+
+.panel-header > div {
+  min-width: 0;
 }
 
 .button {
