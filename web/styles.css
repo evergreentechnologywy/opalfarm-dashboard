@@ -851,16 +851,36 @@ h2 {
 }
 
 .device-table tbody td {
-  padding: 14px 16px;
+  padding: 13px 14px;
   border-bottom: 1px solid rgba(15, 23, 42, 0.06);
   vertical-align: top;
   color: var(--text);
   background: rgba(255, 255, 255, 0.82);
 }
 
+.table-row {
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.table-row:hover td {
+  background: rgba(246, 249, 253, 0.95);
+}
+
 .table-device-cell {
   display: grid;
   gap: 4px;
+}
+
+.table-stack {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.table-code {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.8rem;
+  letter-spacing: -0.03em;
 }
 
 .table-device-cell strong {
@@ -891,25 +911,50 @@ h2 {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  min-width: 400px;
+  min-width: 300px;
 }
 
 .table-subline {
   margin-top: 6px;
   color: var(--text-muted);
   font-size: 0.76rem;
+  line-height: 1.35;
+}
+
+.table-subline-strong {
+  color: var(--heading);
+  font-weight: 700;
+  margin-top: 2px;
+}
+
+.table-warning {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.table-warning strong {
+  color: var(--heading);
+  font-size: 0.84rem;
+  line-height: 1.2;
+}
+
+.table-warning-active strong {
+  color: var(--danger-text);
 }
 
 .table-action {
   min-height: 34px;
-  padding: 0 10px;
+  padding: 0 12px;
   border-radius: 10px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.94);
   color: var(--heading);
-  font-size: 0.84rem;
+  font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
 }
 
 .table-action-primary {

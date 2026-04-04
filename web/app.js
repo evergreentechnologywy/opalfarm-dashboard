@@ -445,26 +445,52 @@ function renderTableView(devices) {
         <div class="table-device-cell">
           <strong>${escapeHtml(formatDeviceName(device))}</strong>
           <small>${escapeHtml(device.serial)}</small>
+          <div class="table-subline table-subline-strong">${escapeHtml(device.transportId || device.serial)}</div>
         </div>
       </td>
-      <td>${escapeHtml(device.serial)}</td>
+      <td>
+        <div class="table-stack">
+          <strong class="table-code">${escapeHtml(device.serial)}</strong>
+          <span class="table-subline">${escapeHtml(device.model || "Unknown model")}</span>
+        </div>
+      </td>
       <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
       <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
       <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
       <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}<div class="table-subline">${escapeHtml(formatPrepTimer(device))}</div><div class="table-subline">${escapeHtml(formatViewerLaunch(device.viewerLaunch))}</div></td>
-      <td>${escapeHtml(formatGmail(device.account))}</td>
-      <td>${escapeHtml(device.publicIp?.currentIp || "Not checked")}</td>
-      <td>${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-")}</td>
-      <td>${escapeHtml(isReused(device) ? "BIG WARNING: Reused in last 100" : (device.routingRisk?.label || deviceWarningLabel(device)))}</td>
+      <td>
+        <div class="table-stack">
+          <strong>${escapeHtml(formatGmail(device.account))}</strong>
+          <span class="table-subline">${escapeHtml(device.account?.status || "unknown")}</span>
+        </div>
+      </td>
+      <td>
+        <div class="table-stack">
+          <strong class="table-code">${escapeHtml(device.publicIp?.currentIp || "Not checked")}</strong>
+          <span class="table-subline">${escapeHtml((device.publicIp?.status || "unknown").toUpperCase())}</span>
+        </div>
+      </td>
+      <td>
+        <div class="table-stack">
+          <strong>${escapeHtml(device.publicIp?.lastCheckedAt ? formatShortTime(device.publicIp.lastCheckedAt) : "-")}</strong>
+          <span class="table-subline">${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "No successful check")}</span>
+        </div>
+      </td>
+      <td>
+        <div class="table-warning ${hasWarning(device) ? "table-warning-active" : ""}">
+          <strong>${escapeHtml(isReused(device) ? "Cross-device IP reuse" : (device.routingRisk?.label || deviceWarningLabel(device)))}</strong>
+          <span class="table-subline">${escapeHtml(buildCompactWarning(device))}</span>
+        </div>
+      </td>
       <td>
         <div class="table-actions">
-          ${renderTableActionButton(device, "open-control", "Open Control")}
-          ${renderTableActionButton(device, "prep", "Prep Device", true)}
-          ${renderTableActionButton(device, "engage-airplane", "Engage Airplane")}
-          ${renderTableActionButton(device, "recover-radios", "Recover Radios")}
-          ${renderTableActionButton(device, "check-ip", "Check IP")}
-          ${renderTableActionButton(device, "start-session", "Start Session")}
-          ${renderTableActionButton(device, "stop-session", "Stop Session")}
+          ${renderTableActionButton(device, "open-control", "Open")}
+          ${renderTableActionButton(device, "prep", "Prep", true)}
+          ${renderTableActionButton(device, "engage-airplane", "Airplane")}
+          ${renderTableActionButton(device, "recover-radios", "Recover")}
+          ${renderTableActionButton(device, "check-ip", "IP")}
+          ${renderTableActionButton(device, "start-session", "Start")}
+          ${renderTableActionButton(device, "stop-session", "Stop")}
         </div>
       </td>
     `;
@@ -485,6 +511,23 @@ function renderTableActionButton(device, action, label, primary = false) {
   const busy = isActionPending(device.serial, action);
   const disabled = shouldDisableAction(device, action);
   return `<button class="table-action${primary ? " table-action-primary" : ""}" data-action="${escapeHtml(action)}"${disabled ? " disabled" : ""}>${escapeHtml(busy ? "Working..." : label)}</button>`;
+}
+
+function buildCompactWarning(device) {
+  if (isReused(device)) {
+    const count = device.publicIp?.reusedWithinLast100?.length || 0;
+    return `${count} other device${count === 1 ? "" : "s"} matched this IP.`;
+  }
+  if (isDuplicate(device)) {
+    return "Duplicate IP detected in the current set.";
+  }
+  if (device.prepState === "failed") {
+    return device.prepMessage || "Prep failed.";
+  }
+  if (device.publicIp?.status === "failed") {
+    return device.publicIp?.lastError || "IP check failed.";
+  }
+  return device.routingRisk?.detail || "No active warning.";
 }
 
 function renderDeviceCard(device) {
