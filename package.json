@@ -15,6 +15,7 @@
     "productName": "PhoneFarm",
     "artifactName": "${productName} ${version}.${ext}",
     "files": [
+      "assets/**/*",
       "electron/**/*",
       "web/**/*",
       "scripts/**/*",
@@ -28,12 +29,16 @@
       "output": "dist"
     },
     "win": {
+      "icon": "assets/phonefarm.ico",
       "target": [
         "portable",
         "nsis"
       ]
     },
     "nsis": {
+      "installerIcon": "assets/phonefarm.ico",
+      "uninstallerIcon": "assets/phonefarm.ico",
+      "installerHeaderIcon": "assets/phonefarm.ico",
       "shortcutName": "PhoneFarm",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
