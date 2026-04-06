@@ -25,7 +25,7 @@ function Assert-Command {
   }
 
   Write-Step "Installing $Name via winget package $WingetId"
-  winget install --id $WingetId --exact --accept-package-agreements --accept-source-agreements
+  winget install --id $WingetId --exact --accept-package-agreements --accept-source-agreements | Out-Host
   $cmd = Get-Command $Name -ErrorAction SilentlyContinue
   if ($cmd) {
     Write-Step "$Name installed at $($cmd.Source)"
