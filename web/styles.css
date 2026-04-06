@@ -225,6 +225,7 @@ h2 {
   color: var(--text-muted);
   line-height: 1.5;
   max-width: 72ch;
+  overflow-wrap: anywhere;
 }
 
 .panel-copy-tight {
@@ -417,6 +418,7 @@ h2 {
   max-width: 100%;
   white-space: normal;
   overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .quick-actions {
@@ -662,6 +664,45 @@ h2 {
   font-size: 1.05rem;
 }
 
+.queue-progress,
+.prep-progress {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.queue-progress {
+  margin-top: 6px;
+}
+
+.prep-progress {
+  margin-top: 8px;
+}
+
+.prep-progress-compact {
+  height: 7px;
+  margin-top: 6px;
+}
+
+.queue-progress-bar,
+.prep-progress-bar {
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1d4ed8 0%, #2563eb 44%, #60a5fa 100%);
+  box-shadow: 0 0 18px rgba(37, 99, 235, 0.22);
+  transition: width 220ms ease;
+}
+
+.device-card.is-preparing .prep-progress-bar,
+.table-row.prep-preparing .prep-progress-bar,
+.queue-progress-bar {
+  animation: prepBarShift 1.5s linear infinite;
+}
+
 .routing-paths {
   display: flex;
   gap: 8px;
@@ -676,6 +717,10 @@ h2 {
   border: 1px solid var(--border);
   color: var(--text-muted);
   font-size: 0.78rem;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .route-chip-danger {
@@ -704,7 +749,7 @@ h2 {
 
 .device-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+  grid-template-columns: 1fr;
   gap: 12px;
 }
 
@@ -717,7 +762,7 @@ h2 {
   box-shadow: var(--shadow-sm);
   transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .device-card::before {
@@ -772,6 +817,20 @@ h2 {
   }
 }
 
+@keyframes prepBarShift {
+  0% {
+    filter: saturate(0.95) brightness(0.98);
+  }
+
+  50% {
+    filter: saturate(1.1) brightness(1.04);
+  }
+
+  100% {
+    filter: saturate(0.95) brightness(0.98);
+  }
+}
+
 .device-card-header,
 .card-badges,
 .device-actions {
@@ -782,8 +841,15 @@ h2 {
 }
 
 .device-card-header {
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-content: stretch;
   align-items: flex-start;
+  gap: 10px;
+}
+
+.device-card-header > div {
+  min-width: 0;
 }
 
 .device-kicker {
@@ -800,6 +866,7 @@ h2 {
   font-size: 1.12rem;
   line-height: 1.1;
   letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
 }
 
 .device-serial {
@@ -807,11 +874,13 @@ h2 {
   color: var(--text-muted);
   font-size: 0.84rem;
   font-family: "Cascadia Code", "Consolas", monospace;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .device-meta-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
@@ -855,7 +924,10 @@ h2 {
   color: var(--text-muted);
   font-size: 0.86rem;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .state-pill-danger {
@@ -868,7 +940,7 @@ h2 {
 
 .device-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .device-actions .button {
@@ -994,6 +1066,16 @@ h2 {
   color: var(--heading);
   font-size: 0.84rem;
   line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.table-warning .table-subline,
+.table-stack strong,
+.table-stack span,
+.table-device-cell strong,
+.table-device-cell small {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .table-warning-active strong {
@@ -1064,14 +1146,6 @@ h2 {
   .toolbar-right {
     width: 100%;
     justify-content: flex-start;
-  }
-
-  .device-meta-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .device-actions {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .context-bar {

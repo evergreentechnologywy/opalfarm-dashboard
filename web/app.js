@@ -37,6 +37,7 @@ const deviceTableBody = document.getElementById("deviceTableBody");
 const queueLengthBadge = document.getElementById("queueLengthBadge");
 const activePrepDevice = document.getElementById("activePrepDevice");
 const activePrepCountdown = document.getElementById("activePrepCountdown");
+const activePrepProgressBar = document.getElementById("activePrepProgressBar");
 const lastCompletedPrep = document.getElementById("lastCompletedPrep");
 const lastCompletedPrepMeta = document.getElementById("lastCompletedPrepMeta");
 const queueList = document.getElementById("queueList");
@@ -369,9 +370,11 @@ function renderQueuePanel(data) {
   if (prepTelemetry.active) {
     activePrepDevice.textContent = prepTelemetry.active.label || prepTelemetry.active.serial;
     activePrepCountdown.textContent = `Elapsed ${formatDuration(prepTelemetry.active.elapsedMs)} | Started ${formatShortTime(prepTelemetry.active.startedAt)}`;
+    syncProgressBar(activePrepProgressBar, computePrepProgress(prepTelemetry.active.elapsedMs, "preparing"));
   } else {
     activePrepDevice.textContent = "Idle";
     activePrepCountdown.textContent = "No active prep worker";
+    syncProgressBar(activePrepProgressBar, 0);
   }
 
   if (prepTelemetry.lastCompleted) {
@@ -495,7 +498,7 @@ function renderCardView(devices) {
 function renderTableView(devices) {
   deviceTableBody.innerHTML = "";
   if (!devices.length) {
-    deviceTableBody.innerHTML = `<tr><td colspan="11" class="table-empty">No devices match the current filters.</td></tr>`;
+    deviceTableBody.innerHTML = `<tr><td colspan="12" class="table-empty">No devices match the current filters.</td></tr>`;
     return;
   }
 
@@ -521,6 +524,14 @@ function renderTableView(devices) {
       <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
       <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
       <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}<div class="table-subline">${escapeHtml(formatPrepTimer(device))}</div><div class="table-subline">${escapeHtml(formatViewerLaunch(device.viewerLaunch))}</div></td>
+      <td>
+        <div class="table-stack">
+          <strong>${escapeHtml(formatPrepProgressLabel(device))}</strong>
+          <div class="prep-progress prep-progress-compact" aria-hidden="true">
+            <div class="prep-progress-bar" style="width: ${computePrepProgress(device.prepElapsedMs || device.queueWaitMs || 0, device.prepState)}%"></div>
+          </div>
+        </div>
+      </td>
       <td>
         <div class="table-stack">
           <strong>${escapeHtml(formatGmail(device.account))}</strong>
@@ -611,6 +622,7 @@ function renderDeviceCard(device) {
   const routeRiskValue = fragment.querySelector(".route-risk-value");
   const sessionValue = fragment.querySelector(".session-value");
   const prepTimerValue = fragment.querySelector(".prep-timer-value");
+  const prepProgressBar = fragment.querySelector(".prep-progress-bar");
   const lastPrepValue = fragment.querySelector(".last-prep-value");
   const viewerLaunchValue = fragment.querySelector(".viewer-launch-value");
   const transportValue = fragment.querySelector(".transport-value");
@@ -636,6 +648,7 @@ function renderDeviceCard(device) {
   routeRiskValue.textContent = device.routingRisk?.label || "Unknown";
   sessionValue.textContent = formatSession(device.sessionState);
   prepTimerValue.textContent = formatPrepTimer(device);
+  syncProgressBar(prepProgressBar, computePrepProgress(device.prepElapsedMs || device.queueWaitMs || 0, device.prepState));
   lastPrepValue.textContent = device.lastPrepDurationMs ? formatDuration(device.lastPrepDurationMs) : "No recorded prep";
   viewerLaunchValue.textContent = formatViewerLaunch(device.viewerLaunch);
   transportValue.textContent = device.transportId || device.serial;
@@ -906,6 +919,45 @@ function formatPrepTimer(device) {
     return `Last ${formatDuration(device.lastPrepDurationMs)}`;
   }
   return "Not started";
+}
+
+function formatPrepProgressLabel(device) {
+  if (device.prepState === "preparing") {
+    return `${computePrepProgress(device.prepElapsedMs || 0, device.prepState)}% live`;
+  }
+  if (device.prepState === "queued") {
+    return "Queued";
+  }
+  if (device.prepState === "ready") {
+    return "Ready";
+  }
+  if (device.prepState === "failed") {
+    return "Failed";
+  }
+  return "Idle";
+}
+
+function computePrepProgress(durationMs, prepState) {
+  if (prepState === "ready" || prepState === "failed") {
+    return 100;
+  }
+  if (prepState === "queued") {
+    return 16;
+  }
+  if (prepState !== "preparing") {
+    return 0;
+  }
+
+  const expectedMs = 90000;
+  const scaled = Math.round((Math.max(0, durationMs || 0) / expectedMs) * 100);
+  return Math.max(8, Math.min(scaled, 96));
+}
+
+function syncProgressBar(element, progress) {
+  if (!element) {
+    return;
+  }
+  element.style.width = `${progress}%`;
 }
 
 function formatViewerLaunch(viewerLaunch) {
