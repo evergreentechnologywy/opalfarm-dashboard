@@ -222,12 +222,15 @@ async function ensureServer(context) {
 }
 
 function createWindow(baseUrl) {
+  const context = getWorkspaceContext();
+  const iconPath = path.join(context.root, "assets", "phonefarm.ico");
   mainWindow = new BrowserWindow({
     width: 1600,
     height: 980,
     minWidth: 1280,
     minHeight: 820,
     title: "PhoneFarm",
+    icon: pathExists(iconPath) ? iconPath : undefined,
     autoHideMenuBar: true,
     show: false,
     backgroundColor: "#f5f7fb",
