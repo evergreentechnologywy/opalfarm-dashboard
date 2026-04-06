@@ -77,6 +77,31 @@ function Get-DeviceState {
   }
 }
 
+function Get-NetworkReadiness {
+  param([string]$Serial)
+
+  $simState = Invoke-Adb -Arguments @("-s", $Serial, "shell", "getprop", "gsm.sim.state")
+  $route = Invoke-Adb -Arguments @("-s", $Serial, "shell", "ip", "route")
+  $ping = Invoke-Adb -Arguments @("-s", $Serial, "shell", "ping", "-c", "1", "1.1.1.1")
+
+  $simText = ($simState.Output | Out-String).Trim()
+  $routeText = ($route.Output | Out-String).Trim()
+  $pingText = ($ping.Output | Out-String).Trim()
+
+  $hasRoute = $routeText -match '(^|\s)default(\s|$)'
+  $simAbsent = $simText -match 'ABSENT'
+  $networkReachable = $ping.ExitCode -eq 0
+
+  [pscustomobject]@{
+    SimState = $simText
+    Route = $routeText
+    Ping = $pingText
+    HasRoute = $hasRoute
+    SimAbsent = $simAbsent
+    NetworkReachable = $networkReachable
+  }
+}
+
 function Get-FriendlyFailure {
   param(
     [string]$RawError,
@@ -282,6 +307,25 @@ if ($deviceState.ExitCode -ne 0 -or $deviceState.State -eq "offline" -or $device
   exit 1
 }
 
+$networkReadiness = Get-NetworkReadiness -Serial $Serial
+if (-not $networkReadiness.HasRoute -and -not $networkReadiness.NetworkReachable) {
+  $reason = if ($networkReadiness.SimAbsent) {
+    "No SIM card is present and the phone has no usable network route."
+  } elseif ($networkReadiness.SimState) {
+    "Phone has no usable network route. SIM state: $($networkReadiness.SimState)."
+  } else {
+    "Phone has no usable network route."
+  }
+
+  [pscustomobject]@{
+    success = $false
+    ip = ""
+    source = ""
+    error = $reason
+  } | ConvertTo-Json -Compress
+  exit 1
+}
+
 $helperResult = Get-PublicIpFromHelper -Serial $Serial
 if ($helperResult.success) {
   $helperResult | ConvertTo-Json -Compress
@@ -290,13 +334,11 @@ if ($helperResult.success) {
 
 $failure = ""
 if (-not $helperResult.missingHelper) {
-  [pscustomobject]@{
-    success = $false
-    ip = ""
-    source = if ($helperResult.source) { $helperResult.source } else { "phonefarm-ip-helper" }
-    error = if ($helperResult.error) { $helperResult.error } else { "PhoneFarm IP Helper failed to return a public IP." }
-  } | ConvertTo-Json -Compress
-  exit 1
+  $failure = if ($helperResult.error) {
+    [string]$helperResult.error
+  } else {
+    "PhoneFarm IP Helper failed to return a public IP."
+  }
 }
 
 $attempts = @(
