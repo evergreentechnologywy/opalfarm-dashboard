@@ -2,6 +2,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const net = require("net");
 const { spawn, spawnSync } = require("child_process");
 const { URL } = require("url");
 
@@ -15,6 +16,7 @@ const STATE_PATH = path.join(CONFIG_DIR, "state.json");
 const USERS_PATH = path.join(CONFIG_DIR, "users.json");
 const ROUTING_AUDIT_PATH = path.join(CONFIG_DIR, "routing-audit.json");
 const DEVICES_CONFIG_PATH = path.join(CONFIG_DIR, "devices.json");
+const ROUTERS_CONFIG_PATH = path.join(CONFIG_DIR, "routers.json");
 const DEVICE_IP_HISTORY_PATH = path.join(CONFIG_DIR, "device-ip-history.json");
 const ACTIVITY_LOG_PATH = path.join(LOG_DIR, "activity.log");
 const IP_CHECK_LOG_PATH = path.join(LOG_DIR, "ip-check.log");
@@ -31,21 +33,33 @@ const AUTH_BYPASS_USER = {
 
 const DEFAULT_SETTINGS = {
   host: "127.0.0.1",
-  port: 7780,
+  port: 7781,
   adbPath: "adb",
   scrcpyPath: "scrcpy",
   pollIntervalMs: 5000,
   ipRefreshIntervalMs: 15000,
+  routerRefreshIntervalMs: 20000,
   prep: {
     minWaitSeconds: 25,
     maxWaitSeconds: 45,
     onlineTimeoutSeconds: 90
+  },
+  routerControl: {
+    sshPath: "ssh",
+    defaultUsername: "root",
+    defaultPort: 22,
+    commandTimeoutSeconds: 25
+  },
+  uplinkControl: {
+    powerCycleScriptPath: path.join(SCRIPTS_DIR, "cycle-mobile-uplink.ps1"),
+    defaultPowerCycleSeconds: 12
   }
 };
 
 const DEFAULT_STATE = {
   queue: [],
   devices: {},
+  routers: {},
   recentActivity: []
 };
 
@@ -55,6 +69,10 @@ const DEFAULT_IP_HISTORY = {
 
 const DEFAULT_DEVICES_CONFIG = {
   devices: []
+};
+
+const DEFAULT_ROUTERS_CONFIG = {
+  routers: []
 };
 
 const DEFAULT_USERS = {
@@ -73,8 +91,15 @@ let settings = loadJson(SETTINGS_PATH, DEFAULT_SETTINGS);
 let state = loadJson(STATE_PATH, DEFAULT_STATE);
 let usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
 let devicesConfig = loadJson(DEVICES_CONFIG_PATH, DEFAULT_DEVICES_CONFIG);
+let routersConfig = loadJson(ROUTERS_CONFIG_PATH, DEFAULT_ROUTERS_CONFIG);
+if (!state.devices) state.devices = {};
+if (!state.routers) state.routers = {};
+if (!state.queue) state.queue = [];
+if (!state.recentActivity) state.recentActivity = [];
 let preparingSerial = null;
 let deviceCache = {};
+let routerCache = {};
+let routerHealthRefreshInFlight = false;
 let lastIpRefreshAt = 0;
 let lastAccountRefreshAt = 0;
 let lastRoutingAuditAt = 0;
@@ -88,6 +113,7 @@ writeJsonIfMissing(SETTINGS_PATH, settings);
 writeJsonIfMissing(STATE_PATH, state);
 writeJsonIfMissing(USERS_PATH, usersConfig);
 writeJsonIfMissing(DEVICES_CONFIG_PATH, devicesConfig);
+writeJsonIfMissing(ROUTERS_CONFIG_PATH, routersConfig);
 writeJsonIfMissing(DEVICE_IP_HISTORY_PATH, deviceIpHistory);
 fs.writeFileSync(PID_PATH, String(process.pid));
 
@@ -101,11 +127,15 @@ process.on("SIGTERM", () => {
   process.exit(0);
 });
 
-logActivity("system", "PhoneFarm dashboard starting");
+logActivity("system", "OpalFarm dashboard starting");
 refreshDevices();
-refreshRoutingAudit();
+refreshRouters();
+refreshRouterHealth();
+safeRefreshRoutingAudit();
 setInterval(refreshDevices, settings.pollIntervalMs || 5000);
-setInterval(refreshRoutingAudit, 30000);
+setInterval(refreshRouters, settings.routerRefreshIntervalMs || 20000);
+setInterval(refreshRouterHealth, settings.routerRefreshIntervalMs || 20000);
+setInterval(safeRefreshRoutingAudit, 30000);
 setInterval(trimRecentActivity, 10000);
 setInterval(cleanExpiredSessions, 300000);
 
@@ -161,8 +191,18 @@ const server = http.createServer(async (req, res) => {
       settings = loadJson(SETTINGS_PATH, DEFAULT_SETTINGS);
       usersConfig = loadJson(USERS_PATH, DEFAULT_USERS);
       devicesConfig = loadJson(DEVICES_CONFIG_PATH, DEFAULT_DEVICES_CONFIG);
+      routersConfig = loadJson(ROUTERS_CONFIG_PATH, DEFAULT_ROUTERS_CONFIG);
+      refreshRouters();
       logActivity("system", `Configuration reloaded by ${user.username}`);
       return sendJson(res, 200, { ok: true, settings, user: sanitizeUser(user) });
+    }
+
+    const routerMatch = url.pathname.match(/^\/api\/routers\/([^/]+)\/([^/]+)$/);
+    if (req.method === "POST" && routerMatch) {
+      const routerId = decodeURIComponent(routerMatch[1]);
+      const action = routerMatch[2];
+      const body = await readJsonBody(req);
+      return handleRouterAction(res, user, routerId, action, body);
     }
 
     const match = url.pathname.match(/^\/api\/devices\/([^/]+)\/([^/]+)$/);
@@ -229,6 +269,10 @@ function saveSettings() {
 
 function saveDevicesConfig() {
   fs.writeFileSync(DEVICES_CONFIG_PATH, `${JSON.stringify(devicesConfig, null, 2)}\n`);
+}
+
+function saveRoutersConfig() {
+  fs.writeFileSync(ROUTERS_CONFIG_PATH, `${JSON.stringify(routersConfig, null, 2)}\n`);
 }
 
 function saveDeviceIpHistory() {
@@ -361,13 +405,76 @@ function filterRecentActivityForUser(user) {
   return (state.recentActivity || []).filter(entry => !entry.serial || userCanAccessDevice(user, entry.serial));
 }
 
+function getAssignedDevicesForRouter(routerId) {
+  return Object.values(deviceCache).filter(device => String(device.routerId || "") === String(routerId || ""));
+}
+
+function getActiveSession() {
+  const runningDevices = Object.values(deviceCache).filter(device => device.sessionState === "running");
+  if (!runningDevices.length) {
+    return null;
+  }
+  runningDevices.sort((a, b) => new Date(b.sessionStartedAt || 0).getTime() - new Date(a.sessionStartedAt || 0).getTime());
+  const device = runningDevices[0];
+  return {
+    serial: device.serial,
+    label: formatDeviceLabel(device),
+    routerId: device.routerId || "",
+    startedAt: device.sessionStartedAt || ""
+  };
+}
+
+function buildRouterStatuses(visibleDevices) {
+  const visibleBySerial = new Map((visibleDevices || []).map(device => [device.serial, device]));
+  return listConfiguredRouters().map(router => {
+    const assigned = getAssignedDevicesForRouter(router.id)
+      .map(device => visibleBySerial.get(device.serial) || device)
+      .sort((a, b) => (a.routerSlot || 99) - (b.routerSlot || 99) || String(a.nickname || a.serial).localeCompare(String(b.nickname || b.serial)));
+    const activeDevice = assigned.find(device => device.sessionState === "running") || null;
+    const routerState = state.routers?.[router.id] || {};
+    return {
+      id: router.id,
+      label: router.label || router.id,
+      host: router.host || "",
+      ssid: router.ssid || "",
+      lanSubnet: router.lanSubnet || "",
+      mobileUplinkId: router.mobileUplinkId || "",
+      enabled: router.enabled !== false,
+      maxAssignedDevices: Number(router.maxAssignedDevices) || 4,
+      maxConcurrentDevices: Number(router.maxConcurrentDevices) || 1,
+      assignedDeviceCount: assigned.length,
+      capacityRemaining: Math.max((Number(router.maxAssignedDevices) || 4) - assigned.length, 0),
+      overAssigned: assigned.length > (Number(router.maxAssignedDevices) || 4),
+      activeDeviceSerial: activeDevice?.serial || "",
+      activeDeviceLabel: activeDevice ? formatDeviceLabel(activeDevice) : "",
+      slotUsage: assigned.map(device => ({
+        serial: device.serial,
+        label: formatDeviceLabel(device),
+        slot: device.routerSlot || null,
+        sessionState: device.sessionState || "stopped",
+        prepState: device.prepState || "idle"
+      })),
+      routerState: {
+        lastAction: routerState.lastAction || "",
+        lastResult: routerState.lastResult || "",
+        lastCheckedAt: routerState.lastCheckedAt || "",
+        healthStatus: routerState.healthStatus || "unknown",
+        detail: routerState.detail || "",
+        reachability: routerState.reachability || { ssh: false, http: false, https: false }
+      }
+    };
+  });
+}
+
 function getDeviceConfig(serial) {
   return (devicesConfig.devices || []).find(device => device.serial === serial) || {
     serial,
     phoneNumber: null,
     nickname: "",
     role: "sim-direct",
-    parentHotspotSerial: ""
+    parentHotspotSerial: "",
+    routerId: "",
+    routerSlot: null
   };
 }
 
@@ -387,6 +494,14 @@ function upsertDeviceConfig(serial, patch) {
   devicesConfig.devices = devices;
   saveDevicesConfig();
   return nextRecord;
+}
+
+function getRouterConfig(routerId) {
+  return (routersConfig.routers || []).find(router => router.id === routerId) || null;
+}
+
+function listConfiguredRouters() {
+  return (routersConfig.routers || []).slice().sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
 }
 
 function getAssignedPhoneNumbers() {
@@ -441,6 +556,8 @@ function buildStatus(user) {
   const visibleSerials = new Set(visibleDevices.map(device => device.serial));
   const visibleQueue = (state.queue || []).filter(serial => visibleSerials.has(serial));
   const visiblePreparing = preparingSerial && visibleSerials.has(preparingSerial) ? preparingSerial : null;
+  const routers = buildRouterStatuses(visibleDevices);
+  const activeSession = getActiveSession();
   return {
     ok: true,
     user: sanitizeUser(user),
@@ -449,13 +566,20 @@ function buildStatus(user) {
       port: settings.port,
       pollIntervalMs: settings.pollIntervalMs,
       ipRefreshIntervalMs: settings.ipRefreshIntervalMs,
+      routerRefreshIntervalMs: settings.routerRefreshIntervalMs,
       prep: settings.prep
     },
     queue: visibleQueue,
     preparingSerial: visiblePreparing,
+    activeSession,
+    routerConstraints: {
+      maxConcurrentDevicesPerRouter: 1,
+      maxConcurrentDevicesGlobal: 1
+    },
     prepTelemetry: buildPrepTelemetry(visibleDevices),
     routingAudit,
     routingGuard,
+    routers,
     devices: visibleDevices,
     recentActivity: filterRecentActivityForUser(user)
   };
@@ -544,10 +668,14 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   const knownDevice = deviceCache[serial] || buildMissingDevice(serial);
   const routingGuard = buildRoutingGuard(loadRoutingAudit());
   if (action === "metadata") {
+    const nextRouterId = String(body.routerId || "").trim();
+    const nextRouterSlot = Number.isFinite(Number(body.routerSlot)) ? Number(body.routerSlot) : null;
     upsertDeviceConfig(serial, {
       nickname: String(body.nickname || "").trim(),
       role: String(body.role || "sim-direct").trim() || "sim-direct",
-      parentHotspotSerial: String(body.parentHotspotSerial || "").trim()
+      parentHotspotSerial: String(body.parentHotspotSerial || "").trim(),
+      routerId: nextRouterId,
+      routerSlot: nextRouterSlot
     });
     refreshDevices();
     logActivity("metadata", `Device metadata updated by ${user.username}`, serial);
@@ -640,6 +768,10 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     if (routingGuard.blocked) {
       return sendJson(res, 409, { error: `Session start blocked: ${routingGuard.reasons.join(" | ")}`, routingGuard });
     }
+    const activationLock = buildActivationLock(knownDevice);
+    if (!activationLock.allowed) {
+      return sendJson(res, 409, { error: activationLock.reason, activationLock });
+    }
     const verification = await runDevicePublicIpCheck(serial, "pre-session");
     if (!verification.success) {
       return sendJson(res, 409, { error: verification.error || "IP verification failed; session not started" });
@@ -670,6 +802,55 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     return sendJson(res, 200, { ok: true });
   }
 
+  if (action === "connect-router") {
+    const router = knownDevice.routerId ? getRouterConfig(knownDevice.routerId) : null;
+    if (!router) {
+      return sendJson(res, 409, { error: "Assign this phone to an Opal router before connecting." });
+    }
+    const script = spawnSync("powershell.exe", [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      path.join(SCRIPTS_DIR, "connect-phone-to-router.ps1"),
+      "-Serial",
+      serial,
+      "-Ssid",
+      String(router.ssid || ""),
+      "-Password",
+      String(router.wifiPassword || ""),
+      "-SettingsPath",
+      SETTINGS_PATH
+    ], {
+      cwd: ROOT,
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 45000
+    });
+
+    const payload = parseJsonPayload(script.stdout);
+    if (script.status !== 0 || !payload?.ok) {
+      const errorMessage = payload?.message || String(script.stderr || script.stdout || "").trim() || "Phone-to-router connect failed.";
+      updateDeviceState(serial, { prepMessage: errorMessage });
+      logActivity("router-connect", `Phone-to-router connect failed: ${errorMessage}`, serial);
+      return sendJson(res, 500, { error: errorMessage, detail: payload || null });
+    }
+
+    updateDeviceState(serial, {
+      prepMessage: `Router Wi-Fi connect requested for ${router.label || router.id}`
+    });
+    logActivity("router-connect", `Phone-to-router connect requested by ${user.username} for ${router.label || router.id}`, serial);
+    return sendJson(res, 200, { ok: true, detail: payload });
+  }
+
+  if (action === "reset-uplink-ip") {
+    const router = knownDevice.routerId ? getRouterConfig(knownDevice.routerId) : null;
+    if (!router) {
+      return sendJson(res, 409, { error: "Assign this phone to an Opal router before resetting its uplink." });
+    }
+    return handleRouterAction(res, user, router.id, "cycle-uplink", body);
+  }
+
   if (action === "prep") {
     if (!knownDevice.serial) {
       return sendJson(res, 404, { error: "Unknown device serial" });
@@ -692,6 +873,69 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   }
 
   return sendJson(res, 400, { error: `Unsupported action: ${action}` });
+}
+
+async function handleRouterAction(res, user, routerId, action, body) {
+  const router = getRouterConfig(routerId);
+  if (!router) {
+    return sendJson(res, 404, { error: "Unknown router" });
+  }
+
+  const scriptName = action === "cycle-uplink" ? "cycle-mobile-uplink.ps1" : "invoke-opal-router-action.ps1";
+  const args = action === "cycle-uplink"
+    ? ["-RouterId", routerId, "-PowerCycleSeconds", String(Number(body?.powerCycleSeconds) || settings.uplinkControl?.defaultPowerCycleSeconds || 12)]
+    : ["-RouterId", routerId, "-Action", action, "-RoutersPath", ROUTERS_CONFIG_PATH, "-SettingsPath", SETTINGS_PATH];
+
+  const script = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    path.join(SCRIPTS_DIR, scriptName),
+    ...args
+  ], {
+    cwd: ROOT,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 60000
+  });
+
+  const payload = parseJsonPayload(script.stdout);
+  const ok = script.status === 0 && payload?.ok;
+  const nextState = {
+    ...(state.routers?.[routerId] || {}),
+    lastAction: action,
+    lastResult: ok ? "ok" : "failed",
+    lastCheckedAt: new Date().toISOString(),
+    healthStatus: action === "router-health" ? (ok ? "online" : "degraded") : ((state.routers?.[routerId]?.healthStatus) || "unknown"),
+    detail: payload?.detail || payload?.message || String(script.stderr || "").trim()
+  };
+  state.routers[routerId] = nextState;
+  saveState();
+  refreshRouters();
+  logActivity("router", `${router.label || router.id} ${action} ${ok ? "completed" : "failed"} by ${user.username}`, null);
+
+  if (!ok) {
+    return sendJson(res, 500, { error: payload?.message || "Router action failed", detail: payload || null, router: routerCache[routerId] || null });
+  }
+
+  return sendJson(res, 200, { ok: true, detail: payload || null, router: routerCache[routerId] || null });
+}
+
+function parseJsonPayload(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const lines = trimmed.split(/\r?\n/).filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    try {
+      return JSON.parse(lines[index]);
+    } catch (error) {
+      // Keep scanning for the last JSON line.
+    }
+  }
+  return null;
 }
 
 function buildMissingDevice(serial) {
@@ -720,6 +964,8 @@ function buildMissingDevice(serial) {
     phoneNumber: deviceConfig.phoneNumber || null,
     role: deviceConfig.role || "sim-direct",
     parentHotspotSerial: deviceConfig.parentHotspotSerial || "",
+    routerId: deviceConfig.routerId || "",
+    routerSlot: Number.isFinite(Number(deviceConfig.routerSlot)) ? Number(deviceConfig.routerSlot) : null,
     network: state.devices?.[serial]?.network || {
       ipAddress: "",
       interface: "",
@@ -802,6 +1048,8 @@ function refreshDevices() {
       phoneNumber: metadata.phoneNumber || null,
       role: metadata.role || "sim-direct",
       parentHotspotSerial: metadata.parentHotspotSerial || "",
+      routerId: metadata.routerId || "",
+      routerSlot: Number.isFinite(Number(metadata.routerSlot)) ? Number(metadata.routerSlot) : null,
       network,
       account,
       publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
@@ -850,6 +1098,125 @@ function refreshDevices() {
   if (shouldRefreshAccounts) {
     lastAccountRefreshAt = Date.now();
   }
+  refreshRouters();
+}
+
+function refreshRouters() {
+  const next = {};
+  for (const router of listConfiguredRouters()) {
+    const assignedDevices = getAssignedDevicesForRouter(router.id);
+    const activeDevice = assignedDevices.find(device => device.sessionState === "running") || null;
+    const routerState = state.routers?.[router.id] || {};
+    next[router.id] = {
+      id: router.id,
+      label: router.label || router.id,
+      host: router.host || "",
+      enabled: router.enabled !== false,
+      assignedDeviceCount: assignedDevices.length,
+      activeDeviceSerial: activeDevice?.serial || "",
+      overAssigned: assignedDevices.length > (Number(router.maxAssignedDevices) || 4),
+      lastAction: routerState.lastAction || "",
+      lastResult: routerState.lastResult || "",
+      lastCheckedAt: routerState.lastCheckedAt || "",
+      healthStatus: routerState.healthStatus || "unknown",
+      detail: routerState.detail || "",
+      reachability: routerState.reachability || { ssh: false, http: false, https: false }
+    };
+  }
+  routerCache = next;
+}
+
+async function refreshRouterHealth() {
+  if (routerHealthRefreshInFlight) {
+    return;
+  }
+
+  routerHealthRefreshInFlight = true;
+  try {
+    const routers = listConfiguredRouters();
+    const results = await Promise.all(routers.map(probeRouterHealth));
+    for (const result of results) {
+      const current = state.routers?.[result.id] || {};
+      state.routers[result.id] = {
+        ...current,
+        lastCheckedAt: result.checkedAt,
+        healthStatus: result.healthStatus,
+        detail: result.detail,
+        reachability: result.reachability
+      };
+    }
+    saveState();
+    refreshRouters();
+  } catch (error) {
+    logActivity("router", `Router health refresh failed: ${error.message}`);
+  } finally {
+    routerHealthRefreshInFlight = false;
+  }
+}
+
+async function probeRouterHealth(router) {
+  const host = String(router.host || "").trim();
+  const checkedAt = new Date().toISOString();
+  if (!host) {
+    return {
+      id: router.id,
+      checkedAt,
+      healthStatus: "unconfigured",
+      detail: "Router host is not configured.",
+      reachability: { ssh: false, http: false, https: false }
+    };
+  }
+
+  const sshPort = Number(router.sshPort) || Number(settings.routerControl?.defaultPort) || 22;
+  const [ssh, http, https] = await Promise.all([
+    probeTcpPort(host, sshPort, 1200),
+    probeTcpPort(host, 80, 1200),
+    probeTcpPort(host, 443, 1200)
+  ]);
+
+  const reachability = {
+    ssh: ssh.open,
+    http: http.open,
+    https: https.open
+  };
+  const openCount = [reachability.ssh, reachability.http, reachability.https].filter(Boolean).length;
+  const healthStatus = openCount === 0 ? "offline" : (reachability.ssh ? "online" : "partial");
+  const detail = [
+    `SSH ${sshPort}: ${reachability.ssh ? "open" : "closed"}`,
+    `HTTP 80: ${reachability.http ? "open" : "closed"}`,
+    `HTTPS 443: ${reachability.https ? "open" : "closed"}`
+  ].join(" | ");
+
+  return {
+    id: router.id,
+    checkedAt,
+    healthStatus,
+    detail,
+    reachability
+  };
+}
+
+function probeTcpPort(host, port, timeoutMs) {
+  return new Promise(resolve => {
+    const socket = new net.Socket();
+    let settled = false;
+    const finalize = open => {
+      if (settled) return;
+      settled = true;
+      try {
+        socket.destroy();
+      } catch (error) {
+        // Ignore socket cleanup errors.
+      }
+      resolve({ open });
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finalize(true));
+    socket.once("timeout", () => finalize(false));
+    socket.once("error", () => finalize(false));
+    socket.connect(port, host);
+  });
 }
 
 function applyDuplicateFlags(devices) {
@@ -1409,6 +1776,14 @@ function refreshRoutingAudit() {
   runPowerShellScript("audit-phonefarm-routing.ps1", [], { detached: true });
 }
 
+function safeRefreshRoutingAudit() {
+  try {
+    refreshRoutingAudit();
+  } catch (error) {
+    logActivity("routing", `Routing audit startup skipped: ${error.message}`);
+  }
+}
+
 function loadRoutingAudit() {
   return loadJson(ROUTING_AUDIT_PATH, {
     checkedAt: "",
@@ -1443,12 +1818,17 @@ function buildPrepTelemetry(devices) {
 
 function enrichDeviceForStatus(device, routingAudit) {
   const normalizedPublicIp = normalizePublicIpState(device.serial, device.publicIp);
+  const router = device.routerId ? getRouterConfig(device.routerId) : null;
+  const activeSession = getActiveSession();
   return {
     ...device,
     publicIp: normalizedPublicIp,
     prepElapsedMs: getActivePrepElapsedMs(device),
     queueWaitMs: getQueueWaitMs(device),
-    routingRisk: getDeviceRoutingRisk({ ...device, publicIp: normalizedPublicIp }, routingAudit)
+    routingRisk: getDeviceRoutingRisk({ ...device, publicIp: normalizedPublicIp }, routingAudit),
+    routerLabel: router?.label || "",
+    routerSsid: router?.ssid || "",
+    activationLock: buildActivationLock(device, activeSession)
   };
 }
 
@@ -1464,6 +1844,41 @@ function getQueueWaitMs(device) {
     return 0;
   }
   return Math.max(0, Date.now() - new Date(device.prepEnqueuedAt).getTime());
+}
+
+function buildActivationLock(device, activeSession = getActiveSession()) {
+  if (!device.routerId) {
+    return {
+      allowed: false,
+      reason: "Assign this phone to an Opal router before activation."
+    };
+  }
+
+  if (!activeSession) {
+    return {
+      allowed: true,
+      reason: ""
+    };
+  }
+
+  if (activeSession.serial === device.serial) {
+    return {
+      allowed: true,
+      reason: ""
+    };
+  }
+
+  if (activeSession.routerId && activeSession.routerId === device.routerId) {
+    return {
+      allowed: false,
+      reason: `${activeSession.label || activeSession.serial} is already active on ${device.routerLabel || device.routerId}.`
+    };
+  }
+
+  return {
+    allowed: false,
+    reason: `${activeSession.label || activeSession.serial} is already the globally active device.`
+  };
 }
 
 function buildRoutingGuard(routingAudit) {

@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PhoneFarm Dashboard v20260406a</title>
+    <title>OpalFarm Dashboard v20260406a</title>
     <script>
       (function setPhoneFarmBasePath() {
         const baseHref = window.location.pathname.startsWith("/phonefarm") ? "/phonefarm/" : "/";
@@ -25,10 +25,10 @@
         <div class="hero-copy">
           <p class="eyebrow">Internal Operations Console</p>
           <div class="brand-row">
-            <h1>PhoneFarm</h1>
+            <h1>OpalFarm</h1>
             <span class="build-chip">Build 20260406a</span>
           </div>
-          <p class="subtitle">Local device operations for prep, verification, control, and queue management across USB-connected Android phones.</p>
+          <p class="subtitle">Local GL.iNet Opal operations for router-controlled Android sessions, single-device activation, and uplink-aware IP resets.</p>
           <div class="hero-status-row">
             <span id="routeGuardBadge" class="badge badge-neutral">Checking routing</span>
             <span id="liveClock" class="count-pill">--</span>
@@ -109,13 +109,24 @@
         </div>
       </section>
 
+      <section class="panel router-panel">
+        <div class="panel-header">
+          <div>
+            <h2>Opal Routers</h2>
+            <p class="panel-copy">15 Opal nodes with 4-phone assignment caps and one active phone allowed per router and across the full dashboard.</p>
+          </div>
+          <span id="routerCount" class="count-pill">0 routers</span>
+        </div>
+        <div id="routerGrid" class="router-grid"></div>
+      </section>
+
       <main class="dashboard-layout">
         <section class="main-column">
           <section class="panel devices-panel">
             <div class="panel-header">
               <div>
                 <h2>Devices</h2>
-                <p class="panel-copy">Visible devices for this operator, with direct actions, prep timing, and route-risk cues.</p>
+                <p class="panel-copy">Visible devices with Opal assignment, activation locks, prep timing, IP verification, and direct control actions.</p>
               </div>
               <span id="deviceCount" class="count-pill">0 devices</span>
             </div>
@@ -130,6 +141,7 @@
                     <th>Serial</th>
                     <th>Status</th>
                     <th>Role</th>
+                    <th>Router</th>
                     <th>Session</th>
                     <th>Prep</th>
                     <th>Progress</th>
@@ -234,6 +246,10 @@
             <strong class="ip-status-value"></strong>
           </div>
           <div class="meta-cell">
+            <span>Router</span>
+            <strong class="router-value"></strong>
+          </div>
+          <div class="meta-cell">
             <span>Route Risk</span>
             <strong class="route-risk-value"></strong>
           </div>
@@ -257,6 +273,10 @@
             <strong class="viewer-launch-value"></strong>
           </div>
           <div class="meta-cell">
+            <span>Activation Lock</span>
+            <strong class="activation-lock-value"></strong>
+          </div>
+          <div class="meta-cell">
             <span>ADB Serial</span>
             <strong class="transport-value"></strong>
           </div>
@@ -273,6 +293,8 @@
         <div class="device-actions">
           <button class="button button-secondary action-open" type="button">Open Control</button>
           <button class="button button-primary action-prep" type="button">Prep Device</button>
+          <button class="button button-secondary action-connect-router" type="button">Connect Router</button>
+          <button class="button button-secondary action-reset-uplink" type="button">Reset Uplink</button>
           <button class="button button-secondary action-airplane" type="button">Engage Airplane</button>
           <button class="button button-secondary action-recover" type="button">Recover Radios</button>
           <button class="button button-secondary action-check-ip" type="button">Check IP</button>

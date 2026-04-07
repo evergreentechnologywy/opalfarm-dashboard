@@ -60,6 +60,8 @@ const showReadyButton = document.getElementById("showReadyButton");
 const showWarningsButton = document.getElementById("showWarningsButton");
 const toggleViewButton = document.getElementById("toggleViewButton");
 const focusSearchButton = document.getElementById("focusSearchButton");
+const routerCount = document.getElementById("routerCount");
+const routerGrid = document.getElementById("routerGrid");
 const template = document.getElementById("deviceCardTemplate");
 
 let searchDebounce = 0;
@@ -201,6 +203,7 @@ function render() {
   renderHeroGuard(data.routingGuard || {});
   renderSummaryStats(buildSummaryStats(data.devices || []));
   renderContextBar(data.devices || [], visibleDevices);
+  renderRouters(data.routers || []);
   renderQueuePanel(data);
   renderActivityFeed(data.recentActivity || []);
   renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] }, data.routingGuard || {});
@@ -212,11 +215,13 @@ function render() {
 function buildEmptyData() {
   return {
     devices: [],
+    routers: [],
     queue: [],
     recentActivity: [],
     routingAudit: { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] },
     routingGuard: { blocked: false, reasons: [] },
-    prepTelemetry: { active: null, lastCompleted: null }
+    prepTelemetry: { active: null, lastCompleted: null },
+    activeSession: null
   };
 }
 
@@ -235,13 +240,16 @@ function renderHeroGuard(routingGuard) {
 }
 
 function buildSummaryStats(devices) {
+  const routers = state.data?.routers || [];
   return [
     { label: "Total Devices", value: devices.length, tone: "neutral", onClick: () => clearQuickFilters() },
+    { label: "Routers", value: routers.length, tone: "neutral", onClick: () => focusSearch() },
     { label: "Online", value: devices.filter(device => device.online).length, tone: "success", onClick: () => applyQuickFilter({ status: "online" }) },
     { label: "Queued", value: devices.filter(device => device.prepState === "queued").length, tone: "warning", onClick: () => applyQuickFilter({ status: "queued" }) },
     { label: "Preparing", value: devices.filter(device => device.prepState === "preparing").length, tone: "info", onClick: () => applyQuickFilter({ status: "preparing" }) },
     { label: "Ready", value: devices.filter(device => device.prepState === "ready").length, tone: "success", onClick: () => applyQuickFilter({ status: "ready", readyOnly: true }) },
     { label: "Failed", value: devices.filter(device => device.prepState === "failed").length, tone: "danger", onClick: () => applyQuickFilter({ status: "failed" }) },
+    { label: "Locked", value: devices.filter(device => device.activationLock?.allowed === false).length, tone: devices.some(device => device.activationLock?.allowed === false) ? "warning" : "neutral", onClick: () => applyQuickFilter({ warningsOnly: true }) },
     {
       label: "Duplicate IP",
       value: devices.filter(device => isDuplicate(device)).length,
@@ -269,7 +277,9 @@ function renderContextBar(allDevices, visibleDevices) {
   const hiddenCount = Math.max((allDevices || []).length - (visibleDevices || []).length, 0);
   const modeLabel = state.viewMode === "table" ? "Table view" : "Card view";
   const warningCount = (visibleDevices || []).filter(hasWarning).length;
-  contextSummary.textContent = `${visibleDevices.length} visible, ${hiddenCount} filtered out, ${warningCount} with warnings, ${modeLabel.toLowerCase()}.`;
+  const activeSession = state.data?.activeSession;
+  const activeSummary = activeSession ? `Active device: ${activeSession.label || activeSession.serial}.` : "No active device.";
+  contextSummary.textContent = `${visibleDevices.length} visible, ${hiddenCount} filtered out, ${warningCount} with warnings, ${modeLabel.toLowerCase()}. ${activeSummary}`;
 
   contextChips.innerHTML = "";
   const chips = [];
@@ -405,6 +415,57 @@ function renderQueuePanel(data) {
   queueList.appendChild(fragment);
 }
 
+function renderRouters(routers) {
+  routerCount.textContent = `${routers.length} routers`;
+  routerGrid.innerHTML = "";
+  if (!routers.length) {
+    routerGrid.innerHTML = `<div class="empty-state">No Opal routers are configured yet.</div>`;
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  for (const router of routers) {
+    const card = document.createElement("article");
+    card.className = "router-card";
+    const healthStatus = router.routerState?.healthStatus || "unknown";
+    const healthClass = healthStatus === "online" ? "badge-ready" : (healthStatus === "partial" ? "badge-queued" : (healthStatus === "offline" ? "badge-failed" : "badge-neutral"));
+    card.innerHTML = `
+      <header>
+        <div>
+          <p class="device-kicker">Router</p>
+          <h3>${escapeHtml(router.label || router.id)}</h3>
+          <p class="device-serial">${escapeHtml(router.host || "Host not set")}</p>
+        </div>
+        <div class="card-badges">
+          ${renderBadgeMarkup(router.activeDeviceSerial ? "Active" : "Idle", router.activeDeviceSerial ? "badge-online" : "badge-idle")}
+          ${renderBadgeMarkup(healthStatus.toUpperCase(), healthClass)}
+        </div>
+      </header>
+      <div class="router-meta">
+        <div><span>Assigned</span><strong>${escapeHtml(String(router.assignedDeviceCount))}/${escapeHtml(String(router.maxAssignedDevices || 4))}</strong></div>
+        <div><span>Active Device</span><strong>${escapeHtml(router.activeDeviceLabel || "None")}</strong></div>
+        <div><span>SSID</span><strong>${escapeHtml(router.ssid || "Not set")}</strong></div>
+        <div><span>Uplink</span><strong>${escapeHtml(router.mobileUplinkId || "Not set")}</strong></div>
+        <div><span>Reachability</span><strong>${escapeHtml(buildRouterReachability(router))}</strong></div>
+        <div><span>Last Check</span><strong>${escapeHtml(router.routerState?.lastCheckedAt ? formatShortTime(router.routerState.lastCheckedAt) : "Not checked")}</strong></div>
+      </div>
+      <div class="table-subline">${escapeHtml(router.routerState?.detail || "No router health detail yet.")}</div>
+      <div class="router-actions">
+        <button class="button button-secondary" type="button" data-router-action="router-health">Health</button>
+        <button class="button button-secondary" type="button" data-router-action="wan-reconnect">Reconnect WAN</button>
+        <button class="button button-secondary" type="button" data-router-action="restart-wifi">Restart Wi-Fi</button>
+        <button class="button button-secondary" type="button" data-router-action="cycle-uplink">Cycle Uplink</button>
+      </div>
+    `;
+    card.querySelectorAll("[data-router-action]").forEach(button => {
+      button.addEventListener("click", () => invokeRouterAction(router.id, button.dataset.routerAction));
+    });
+    fragment.appendChild(card);
+  }
+
+  routerGrid.appendChild(fragment);
+}
+
 function renderActivityFeed(events) {
   activityList.innerHTML = "";
   const visibleEvents = events.filter(isOperatorEvent).slice(0, 20);
@@ -498,7 +559,7 @@ function renderCardView(devices) {
 function renderTableView(devices) {
   deviceTableBody.innerHTML = "";
   if (!devices.length) {
-    deviceTableBody.innerHTML = `<tr><td colspan="12" class="table-empty">No devices match the current filters.</td></tr>`;
+    deviceTableBody.innerHTML = `<tr><td colspan="13" class="table-empty">No devices match the current filters.</td></tr>`;
     return;
   }
 
@@ -522,6 +583,12 @@ function renderTableView(devices) {
       </td>
       <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
       <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
+      <td>
+        <div class="table-stack">
+          <strong>${escapeHtml(device.routerLabel || device.routerId || "Unassigned")}</strong>
+          <span class="table-subline">${escapeHtml(device.routerSlot ? `Slot ${device.routerSlot}` : "No slot")}</span>
+        </div>
+      </td>
       <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
       <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}<div class="table-subline">${escapeHtml(formatPrepTimer(device))}</div><div class="table-subline">${escapeHtml(formatViewerLaunch(device.viewerLaunch))}</div></td>
       <td>
@@ -560,6 +627,8 @@ function renderTableView(devices) {
         <div class="table-actions">
           ${renderTableActionButton(device, "open-control", "Open")}
           ${renderTableActionButton(device, "prep", "Prep", true)}
+          ${renderTableActionButton(device, "connect-router", "Connect")}
+          ${renderTableActionButton(device, "reset-uplink-ip", "Reset IP")}
           ${renderTableActionButton(device, "engage-airplane", "Airplane")}
           ${renderTableActionButton(device, "recover-radios", "Recover")}
           ${renderTableActionButton(device, "check-ip", "IP")}
@@ -588,6 +657,9 @@ function renderTableActionButton(device, action, label, primary = false) {
 }
 
 function buildCompactWarning(device) {
+  if (!device.routerId) {
+    return "This phone is not assigned to an Opal router yet.";
+  }
   if (isReused(device)) {
     const count = device.publicIp?.reusedWithinLast100?.length || 0;
     return `${count} other device${count === 1 ? "" : "s"} matched this IP.`;
@@ -600,6 +672,9 @@ function buildCompactWarning(device) {
   }
   if (device.publicIp?.status === "failed") {
     return device.publicIp?.lastError || "IP check failed.";
+  }
+  if (device.activationLock?.allowed === false) {
+    return device.activationLock.reason || "Activation is locked.";
   }
   return device.routingRisk?.detail || "No active warning.";
 }
@@ -619,12 +694,14 @@ function renderDeviceCard(device) {
   const publicIpValue = fragment.querySelector(".public-ip-value");
   const lastCheckedValue = fragment.querySelector(".last-checked-value");
   const ipStatusValue = fragment.querySelector(".ip-status-value");
+  const routerValue = fragment.querySelector(".router-value");
   const routeRiskValue = fragment.querySelector(".route-risk-value");
   const sessionValue = fragment.querySelector(".session-value");
   const prepTimerValue = fragment.querySelector(".prep-timer-value");
   const prepProgressBar = fragment.querySelector(".prep-progress-bar");
   const lastPrepValue = fragment.querySelector(".last-prep-value");
   const viewerLaunchValue = fragment.querySelector(".viewer-launch-value");
+  const activationLockValue = fragment.querySelector(".activation-lock-value");
   const transportValue = fragment.querySelector(".transport-value");
   const changedState = fragment.querySelector(".state-changed");
   const duplicateState = fragment.querySelector(".state-duplicate");
@@ -645,12 +722,14 @@ function renderDeviceCard(device) {
   publicIpValue.textContent = device.publicIp?.currentIp || "Not checked";
   lastCheckedValue.textContent = device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "-";
   ipStatusValue.textContent = (device.publicIp?.status || "unknown").toUpperCase();
+  routerValue.textContent = device.routerLabel || device.routerId || "Unassigned";
   routeRiskValue.textContent = device.routingRisk?.label || "Unknown";
   sessionValue.textContent = formatSession(device.sessionState);
   prepTimerValue.textContent = formatPrepTimer(device);
   syncProgressBar(prepProgressBar, computePrepProgress(device.prepElapsedMs || device.queueWaitMs || 0, device.prepState));
   lastPrepValue.textContent = device.lastPrepDurationMs ? formatDuration(device.lastPrepDurationMs) : "No recorded prep";
   viewerLaunchValue.textContent = formatViewerLaunch(device.viewerLaunch);
+  activationLockValue.textContent = device.activationLock?.allowed ? "Ready" : (device.activationLock?.reason || "Locked");
   transportValue.textContent = device.transportId || device.serial;
   changedState.textContent = `Changed since last prep/session: ${device.publicIp?.changedSinceLastPrep ? "Yes" : "No"}`;
   duplicateState.textContent = buildReuseWarning(device);
@@ -669,6 +748,8 @@ function renderDeviceCard(device) {
 
   bindCardAction(fragment.querySelector(".action-open"), device, "open-control", "Open Control");
   bindCardAction(fragment.querySelector(".action-prep"), device, "prep", "Prep Device");
+  bindCardAction(fragment.querySelector(".action-connect-router"), device, "connect-router", "Connect Router");
+  bindCardAction(fragment.querySelector(".action-reset-uplink"), device, "reset-uplink-ip", "Reset Uplink");
   bindCardAction(fragment.querySelector(".action-airplane"), device, "engage-airplane", "Engage Airplane");
   bindCardAction(fragment.querySelector(".action-recover"), device, "recover-radios", "Recover Radios");
   bindCardAction(fragment.querySelector(".action-check-ip"), device, "check-ip", "Check IP");
@@ -688,6 +769,7 @@ function bindCardAction(button, device, action, label) {
 function filterDevices(devices) {
   return devices.filter(device => {
     const searchTarget = `${device.nickname || ""} ${device.serial} ${device.phoneNumber || ""} ${formatGmail(device.account)} ${device.publicIp?.currentIp || ""}`.toLowerCase();
+    const routerTarget = `${device.routerLabel || ""} ${device.routerId || ""} ${device.routerSsid || ""}`.toLowerCase();
     const statusMatch =
       state.filters.status === "all" ||
       (state.filters.status === "online" && device.online) ||
@@ -696,7 +778,7 @@ function filterDevices(devices) {
     const roleMatch = state.filters.role === "all" || (device.role || "sim-direct") === state.filters.role;
     const warningsMatch = !state.filters.warningsOnly || hasWarning(device);
     const readyMatch = !state.filters.readyOnly || device.prepState === "ready";
-    const searchMatch = !state.filters.search || searchTarget.includes(state.filters.search);
+    const searchMatch = !state.filters.search || searchTarget.includes(state.filters.search) || routerTarget.includes(state.filters.search);
     return statusMatch && roleMatch && warningsMatch && readyMatch && searchMatch;
   });
 }
@@ -704,6 +786,7 @@ function filterDevices(devices) {
 function hasWarning(device) {
   return isDuplicate(device) ||
     isReused(device) ||
+    device.activationLock?.allowed === false ||
     device.prepState === "failed" ||
     device.publicIp?.status === "failed" ||
     device.publicIp?.status === "changed" ||
@@ -719,6 +802,9 @@ function isReused(device) {
 }
 
 function buildReuseWarning(device) {
+  if (!device.routerId) {
+    return "Router assignment required before this phone can be activated.";
+  }
   if (device.publicIp?.reusedRecently) {
     const count = device.publicIp?.reusedWithinLast100?.length || 0;
     return `BIG WARNING: this IP was also seen on ${count} other device${count === 1 ? "" : "s"} in the last 100 successful checks.`;
@@ -739,12 +825,23 @@ function buildIpHistorySummary(device) {
 }
 
 function deviceWarningLabel(device) {
+  if (!device.routerId) return "Router Needed";
   if (isDuplicate(device)) return "Duplicate IP";
   if (isReused(device)) return "Reused IP";
+  if (device.activationLock?.allowed === false) return "Activation Locked";
   if (device.publicIp?.status === "changed") return "IP Changed";
   if (device.prepState === "failed") return "Prep Failed";
   if (device.publicIp?.status === "failed") return "IP Check Failed";
   return "None";
+}
+
+function buildRouterReachability(router) {
+  const reachability = router.routerState?.reachability || {};
+  const open = [];
+  if (reachability.ssh) open.push("SSH");
+  if (reachability.http) open.push("HTTP");
+  if (reachability.https) open.push("HTTPS");
+  return open.length ? open.join(" / ") : "No management ports detected";
 }
 
 function shouldDisableAction(device, action) {
@@ -753,7 +850,10 @@ function shouldDisableAction(device, action) {
     return device.prepState === "queued" || device.prepState === "preparing" || Boolean(state.data?.routingGuard?.blocked);
   }
   if (action === "start-session") {
-    return Boolean(state.data?.routingGuard?.blocked);
+    return Boolean(state.data?.routingGuard?.blocked) || !device.activationLock?.allowed;
+  }
+  if (action === "connect-router" || action === "reset-uplink-ip") {
+    return !device.routerId;
   }
   return false;
 }
@@ -819,6 +919,27 @@ async function invokeDeviceAction(serial, action, body = {}) {
   }
 }
 
+async function invokeRouterAction(routerId, action, body = {}) {
+  try {
+    const response = await fetch(apiPath(`/api/routers/${encodeURIComponent(routerId)}/${action}`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      cache: "no-store",
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: "Router action failed" }));
+      throw new Error(error.error || "Router action failed");
+    }
+
+    await refresh();
+  } catch (error) {
+    window.alert(error.message || "Router action failed");
+  }
+}
+
 async function invokeDesktopViewerAction(serial, action, body = {}) {
   if (action === "start-session") {
     const startResponse = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/start-session`), {
@@ -869,6 +990,9 @@ async function invokeDesktopViewerAction(serial, action, body = {}) {
 function formatRole(role) {
   if (role === "hotspot-client") {
     return "Hotspot Client";
+  }
+  if (role === "opal-client") {
+    return "Opal Client";
   }
   return "SIM Direct";
 }

@@ -5,7 +5,7 @@ const http = require("http");
 const { spawn } = require("child_process");
 
 const START_TIMEOUT_MS = 25000;
-const DEFAULT_WORKSPACE_ROOT = "C:\\PhoneFarm";
+const DEFAULT_WORKSPACE_ROOT = "C:\\PhoneFarm-Opal";
 
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
 app.commandLine.appendSwitch("disable-background-timer-throttling");
@@ -69,7 +69,7 @@ function resolveWorkspaceRoot() {
     }
   }
 
-  throw new Error("PhoneFarm workspace was not found. Expected C:\\PhoneFarm or PHONEFARM_ROOT.");
+  throw new Error("OpalFarm workspace was not found. Expected C:\\PhoneFarm-Opal or PHONEFARM_ROOT.");
 }
 
 function getWorkspaceContext() {
@@ -115,7 +115,7 @@ function waitForServer(url, timeoutMs) {
         return;
       }
       if (Date.now() >= deadline) {
-        reject(new Error(`PhoneFarm server did not become ready at ${url} within ${timeoutMs}ms`));
+        reject(new Error(`OpalFarm server did not become ready at ${url} within ${timeoutMs}ms`));
         return;
       }
       setTimeout(poll, 500);
@@ -213,7 +213,7 @@ async function ensureServer(context) {
 
   serverProcess.on("error", error => {
     writeDesktopLog(context.root, `Server start failed: ${error.message}`);
-    dialog.showErrorBox("PhoneFarm Server Start Failed", error.message);
+    dialog.showErrorBox("OpalFarm Server Start Failed", error.message);
   });
 
   await waitForServer(context.baseUrl, START_TIMEOUT_MS);
@@ -229,7 +229,7 @@ function createWindow(baseUrl) {
     height: 980,
     minWidth: 1280,
     minHeight: 820,
-    title: "PhoneFarm",
+    title: "OpalFarm",
     icon: pathExists(iconPath) ? iconPath : undefined,
     autoHideMenuBar: true,
     show: false,
@@ -392,7 +392,7 @@ async function bootstrap() {
     createWindow(baseUrl);
     maybeRunDesktopTest(context);
   } catch (error) {
-    dialog.showErrorBox("PhoneFarm Startup Failed", error.message);
+    dialog.showErrorBox("OpalFarm Startup Failed", error.message);
     app.quit();
   }
 }
@@ -425,7 +425,7 @@ app.on("activate", async () => {
       const context = getWorkspaceContext();
       createWindow(context.baseUrl);
     } catch (error) {
-      dialog.showErrorBox("PhoneFarm Activate Failed", error.message);
+      dialog.showErrorBox("OpalFarm Activate Failed", error.message);
     }
   }
 });

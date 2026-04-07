@@ -1,8 +1,8 @@
 {
-  "name": "phonefarm-dashboard",
+  "name": "opalfarm-dashboard",
   "version": "1.1.0",
   "private": true,
-  "description": "Local-first Android device dashboard for Windows",
+  "description": "Local-first GL.iNet Opal and Android operations dashboard for Windows",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
@@ -11,8 +11,8 @@
     "dist:desktop": "electron-builder --win portable nsis"
   },
   "build": {
-    "appId": "com.phonefarm.desktop",
-    "productName": "PhoneFarm",
+    "appId": "com.opalfarm.desktop",
+    "productName": "OpalFarm",
     "artifactName": "${productName} ${version}.${ext}",
     "files": [
       "assets/**/*",
@@ -39,7 +39,7 @@
       "installerIcon": "assets/phonefarm.ico",
       "uninstallerIcon": "assets/phonefarm.ico",
       "installerHeaderIcon": "assets/phonefarm.ico",
-      "shortcutName": "PhoneFarm",
+      "shortcutName": "OpalFarm",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     }

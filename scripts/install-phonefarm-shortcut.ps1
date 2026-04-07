@@ -1,15 +1,15 @@
 param(
-  [string]$ExePath = "C:\PhoneFarm\dist\win-arm64-unpacked\PhoneFarm.exe",
-  [string]$ShortcutName = "PhoneFarm"
+  [string]$ExePath = "C:\PhoneFarm-Opal\dist\win-arm64-unpacked\OpalFarm.exe",
+  [string]$ShortcutName = "OpalFarm"
 )
 
 $ErrorActionPreference = "Stop"
 
 if (-not (Test-Path -LiteralPath $ExePath)) {
-  throw "PhoneFarm executable was not found at $ExePath"
+  throw "OpalFarm executable was not found at $ExePath"
 }
 
-$startMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\PhoneFarm"
+$startMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\OpalFarm"
 $shortcutPath = Join-Path $startMenuDir "$ShortcutName.lnk"
 
 New-Item -ItemType Directory -Path $startMenuDir -Force | Out-Null
@@ -19,7 +19,7 @@ $shortcut = $shell.CreateShortcut($shortcutPath)
 $shortcut.TargetPath = $ExePath
 $shortcut.WorkingDirectory = Split-Path -Parent $ExePath
 $shortcut.IconLocation = "$ExePath,0"
-$shortcut.Description = "PhoneFarm desktop app"
+$shortcut.Description = "OpalFarm desktop app"
 $shortcut.Save()
 
 [pscustomobject]@{
