@@ -3,7 +3,7 @@
     {
       "id": "opal-01",
       "label": "Opal 01",
-      "host": "192.168.8.11",
+      "host": "192.168.8.1",
       "adminUsername": "root",
       "sshPort": 22,
       "sshKeyPath": "",
