@@ -15,6 +15,21 @@ const state = {
     warningsOnly: false,
     readyOnly: false
   },
+  editor: {
+    serial: null,
+    saving: false
+  },
+  renderCache: {
+    heroGuard: "",
+    summaryStats: "",
+    contextBar: "",
+    routers: "",
+    queue: "",
+    activity: "",
+    routingAudit: "",
+    deviceCount: "",
+    deviceViews: ""
+  },
   userLoaded: false,
   refreshInFlight: false
 };
@@ -63,8 +78,38 @@ const focusSearchButton = document.getElementById("focusSearchButton");
 const routerCount = document.getElementById("routerCount");
 const routerGrid = document.getElementById("routerGrid");
 const template = document.getElementById("deviceCardTemplate");
+const deviceEditorModal = document.getElementById("deviceEditorModal");
+const deviceEditorTitle = document.getElementById("deviceEditorTitle");
+const deviceEditorSubtitle = document.getElementById("deviceEditorSubtitle");
+const deviceEditorForm = document.getElementById("deviceEditorForm");
+const deviceEditorCloseButton = document.getElementById("deviceEditorCloseButton");
+const deviceEditorCancelButton = document.getElementById("deviceEditorCancelButton");
+const deviceEditorSaveButton = document.getElementById("deviceEditorSaveButton");
+const editorNickname = document.getElementById("editorNickname");
+const editorPhoneNumber = document.getElementById("editorPhoneNumber");
+const editorRole = document.getElementById("editorRole");
+const editorRouterId = document.getElementById("editorRouterId");
+const editorRouterSlot = document.getElementById("editorRouterSlot");
+const editorParentHotspotSerial = document.getElementById("editorParentHotspotSerial");
 
 let searchDebounce = 0;
+
+window.addEventListener("error", event => {
+  reportClientError({
+    source: "window.error",
+    message: event.message || "Unhandled window error",
+    detail: event.error?.stack || `${event.filename || ""}:${event.lineno || 0}:${event.colno || 0}`
+  });
+});
+
+window.addEventListener("unhandledrejection", event => {
+  const reason = event.reason;
+  reportClientError({
+    source: "window.unhandledrejection",
+    message: reason?.message || String(reason || "Unhandled promise rejection"),
+    detail: reason?.stack || ""
+  });
+});
 
 logoutButton.addEventListener("click", handleLogout);
 refreshButton.addEventListener("click", () => refresh(true));
@@ -99,12 +144,23 @@ showWarningsButton.addEventListener("click", () => applyQuickFilter({ warningsOn
 toggleViewButton.addEventListener("click", () => setViewMode(state.viewMode === "cards" ? "table" : "cards"));
 focusSearchButton.addEventListener("click", () => focusSearch());
 document.addEventListener("keydown", handleGlobalShortcut);
+deviceEditorCloseButton?.addEventListener("click", closeDeviceEditor);
+deviceEditorCancelButton?.addEventListener("click", closeDeviceEditor);
+deviceEditorModal?.addEventListener("click", event => {
+  if (event.target?.dataset?.closeModal === "device-editor") {
+    closeDeviceEditor();
+  }
+});
+deviceEditorForm?.addEventListener("submit", async event => {
+  event.preventDefault();
+  await saveDeviceMetadata();
+});
 
 render();
 refresh();
 
 setInterval(() => {
-  if (state.user) {
+  if (state.user && !document.hidden) {
     refresh(false);
   }
 }, 4000);
@@ -122,15 +178,12 @@ async function refresh(showToast = false) {
   try {
     await ensureUserLoaded();
 
-    const response = await fetch(apiPath("/api/status"), {
-      credentials: "same-origin",
-      cache: "no-store"
-    });
+    const response = await apiRequest("/api/status");
     if (!response.ok) {
       throw new Error(`Dashboard refresh failed (${response.status})`);
     }
 
-    state.data = await response.json();
+    state.data = response.payload;
     render();
 
     if (showToast) {
@@ -140,7 +193,11 @@ async function refresh(showToast = false) {
       }, 800);
     }
   } catch (error) {
-    window.alert(error.message || "Dashboard refresh failed.");
+    if (showToast || !state.data) {
+      window.alert(error.message || "Dashboard refresh failed.");
+    } else {
+      console.warn(error.message || "Dashboard refresh failed.");
+    }
   } finally {
     state.refreshInFlight = false;
   }
@@ -151,10 +208,7 @@ async function ensureUserLoaded(force = false) {
     return state.user;
   }
 
-  const meResponse = await fetch(apiPath("/api/me"), {
-    credentials: "same-origin",
-    cache: "no-store"
-  });
+  const meResponse = await apiRequest("/api/me");
   if (meResponse.status === 401) {
     state.user = null;
     state.userLoaded = false;
@@ -166,7 +220,7 @@ async function ensureUserLoaded(force = false) {
     throw new Error(`Login session check failed (${meResponse.status})`);
   }
 
-  const mePayload = await meResponse.json();
+  const mePayload = meResponse.payload;
   state.user = mePayload.user;
   state.userLoaded = true;
   return state.user;
@@ -181,7 +235,7 @@ function setViewMode(mode) {
 }
 
 async function handleLogout() {
-  await fetch(apiPath("/api/logout"), { method: "POST", credentials: "same-origin", cache: "no-store" });
+  await apiRequest("/api/logout", { method: "POST" });
   state.userLoaded = false;
   await refresh();
 }
@@ -190,26 +244,282 @@ function apiPath(pathname) {
   return `${BASE_PATH}${pathname}`;
 }
 
+async function apiRequest(pathname, options = {}) {
+  const path = apiPath(pathname);
+  if (desktopBridge?.isDesktopApp && typeof desktopBridge.requestJson === "function") {
+    return desktopBridge.requestJson({
+      path,
+      method: options.method || "GET",
+      body: options.body
+    });
+  }
+
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers: options.body !== undefined ? { "Content-Type": "application/json" } : undefined,
+    credentials: "same-origin",
+    cache: "no-store",
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined
+  });
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    payload: await response.json().catch(() => ({}))
+  };
+}
+
+function reportClientError({ source, message, detail = "", serial = null, level = "error" }) {
+  const payload = {
+    source: source || "renderer",
+    message: message || "Unknown client error",
+    detail: detail || "",
+    serial,
+    level
+  };
+
+  if (desktopBridge?.isDesktopApp && typeof desktopBridge.requestJson === "function") {
+    desktopBridge.requestJson({
+      path: apiPath("/api/client-log"),
+      method: "POST",
+      body: payload
+    }).catch(() => undefined);
+    return;
+  }
+
+  fetch(apiPath("/api/client-log"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    cache: "no-store",
+    body: JSON.stringify(payload)
+  }).catch(() => undefined);
+}
+
+function setTextIfChanged(element, nextText) {
+  if (element.textContent !== nextText) {
+    element.textContent = nextText;
+  }
+}
+
+function setClassIfChanged(element, nextClassName) {
+  if (element.className !== nextClassName) {
+    element.className = nextClassName;
+  }
+}
+
+function buildSummaryStatsSignature(stats) {
+  return stats.map(stat => `${stat.label}:${stat.value}:${stat.tone}`).join("|");
+}
+
+function buildContextSignature(allDevices, visibleDevices, activeSession) {
+  return [
+    state.viewMode,
+    state.filters.search,
+    state.filters.status,
+    state.filters.role,
+    state.filters.warningsOnly ? "1" : "0",
+    state.filters.readyOnly ? "1" : "0",
+    allDevices.length,
+    visibleDevices.length,
+    visibleDevices.filter(hasWarning).length,
+    activeSession?.serial || ""
+  ].join("|");
+}
+
+function buildRoutersSignature(routers) {
+  return routers.map(router => [
+    router.id,
+    router.assignedDeviceCount,
+    router.activeDeviceSerial || "",
+    router.routerState?.healthStatus || "",
+    router.routerState?.lastCheckedAt || "",
+    router.routerState?.detail || "",
+    router.ssid || "",
+    router.mobileUplinkId || ""
+  ].join("~")).join("|");
+}
+
+function buildQueueSignature(data) {
+  const active = data.prepTelemetry?.active;
+  const completed = data.prepTelemetry?.lastCompleted;
+  return [
+    ...(data.queue || []),
+    active?.serial || "",
+    active?.startedAt || "",
+    active?.elapsedMs || 0,
+    completed?.serial || "",
+    completed?.finishedAt || "",
+    completed?.durationMs || 0,
+    completed?.prepState || ""
+  ].join("|");
+}
+
+function buildActivitySignature(events) {
+  return events
+    .filter(isOperatorEvent)
+    .slice(0, 20)
+    .map(event => `${event.timestamp}|${event.category}|${event.serial || ""}|${event.message}`)
+    .join("|");
+}
+
+function buildRoutingAuditSignature(audit, routingGuard) {
+  return [
+    audit.summary || "",
+    audit.overallOk ? "1" : "0",
+    routingGuard.blocked ? "1" : "0",
+    routingGuard.checkedAt || "",
+    routingGuard.pcPublicIp || "",
+    routingGuard.dashboardAccessPath || "",
+    routingGuard.deviceTrafficPath || "",
+    ...(routingGuard.reasons || []),
+    ...(audit.checks || []).map(check => `${check.name}|${check.ok ? "1" : "0"}|${check.detail || ""}`)
+  ].join("|");
+}
+
+function buildDeviceSignature(device) {
+  if (!device) {
+    return "missing-device";
+  }
+  const pendingByDevice = Object.keys(state.pendingActions)
+    .filter(key => key.startsWith(`${device.serial}:`))
+    .sort()
+    .join(",");
+  return [
+    device.serial,
+    pendingByDevice,
+    device.online ? "1" : "0",
+    device.model || "",
+    device.transportId || "",
+    device.nickname || "",
+    device.phoneNumber || "",
+    device.role || "",
+    device.routerId || "",
+    device.routerSlot || "",
+    device.routerLabel || "",
+    device.routerSsid || "",
+    device.sessionState || "",
+    device.prepState || "",
+    device.prepElapsedMs || 0,
+    device.queueWaitMs || 0,
+    device.lastPrepDurationMs || 0,
+    device.prepMessage || "",
+    device.publicIp?.currentIp || "",
+    device.publicIp?.status || "",
+    device.publicIp?.lastCheckedAt || "",
+    device.publicIp?.changedSinceLastPrep ? "1" : "0",
+    device.publicIp?.reusedRecently ? "1" : "0",
+    (device.publicIp?.duplicateWith || []).join(","),
+    device.routingRisk?.level || "",
+    device.routingRisk?.label || "",
+    device.routingRisk?.detail || "",
+    device.activationLock?.allowed ? "1" : "0",
+    device.activationLock?.reason || "",
+    device.viewerLaunch?.status || "",
+    device.viewerLaunch?.pid || "",
+    device.viewerLaunch?.requestedAt || "",
+    device.viewerLaunch?.confirmedAt || "",
+    device.viewerLaunch?.lastError || ""
+  ].join("~");
+}
+
+function buildDeviceViewsSignature(devices) {
+  const safeDevices = (devices || []).filter(Boolean);
+  const pendingKeys = Object.keys(state.pendingActions).sort().join(",");
+  return [
+    state.viewMode,
+    state.data?.routingGuard?.blocked ? "1" : "0",
+    pendingKeys,
+    ...safeDevices.map(buildDeviceSignature)
+  ].join("|");
+}
+
+function mapChildrenBySerial(container, selector) {
+  const mapped = new Map();
+  container.querySelectorAll(selector).forEach(node => {
+    if (node.dataset.serial) {
+      mapped.set(node.dataset.serial, node);
+    }
+  });
+  return mapped;
+}
+
+function createEmptyStateElement(tagName, className, text, colSpan = 0) {
+  const element = document.createElement(tagName);
+  if (className) {
+    element.className = className;
+  }
+  if (tagName.toLowerCase() === "tr" && colSpan > 0) {
+    const cell = document.createElement("td");
+    cell.colSpan = colSpan;
+    cell.className = className;
+    cell.textContent = text;
+    element.appendChild(cell);
+    return element;
+  }
+  element.textContent = text;
+  return element;
+}
+
 function render() {
   appShell.hidden = false;
   appShell.classList.toggle("table-mode", state.viewMode === "table");
-  currentUser.textContent = `${state.user?.displayName || "Operator"} (${state.user?.role || "admin"})`;
-  liveClock.textContent = formatNow();
+  setTextIfChanged(currentUser, `${state.user?.displayName || "Operator"} (${state.user?.role || "admin"})`);
+  setTextIfChanged(liveClock, formatNow());
 
   const data = state.data || buildEmptyData();
   const visibleDevices = filterDevices(data.devices || []);
+  const summaryStats = buildSummaryStats(data.devices || []);
+  const heroGuardSignature = `${data.routingGuard?.blocked ? "1" : "0"}|${(data.routingGuard?.reasons || []).join("|")}`;
+  const summaryStatsSignature = buildSummaryStatsSignature(summaryStats);
+  const contextSignature = buildContextSignature(data.devices || [], visibleDevices, data.activeSession);
+  const routersSignature = buildRoutersSignature(data.routers || []);
+  const queueSignature = buildQueueSignature(data);
+  const activitySignature = buildActivitySignature(data.recentActivity || []);
+  const routingAuditSignature = buildRoutingAuditSignature(
+    data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] },
+    data.routingGuard || {}
+  );
+  const deviceCountSignature = `${visibleDevices.length}`;
+  const deviceViewsSignature = buildDeviceViewsSignature(visibleDevices);
 
   syncControls();
-  renderHeroGuard(data.routingGuard || {});
-  renderSummaryStats(buildSummaryStats(data.devices || []));
-  renderContextBar(data.devices || [], visibleDevices);
-  renderRouters(data.routers || []);
-  renderQueuePanel(data);
-  renderActivityFeed(data.recentActivity || []);
-  renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] }, data.routingGuard || {});
-
-  deviceCount.textContent = `${visibleDevices.length} visible device${visibleDevices.length === 1 ? "" : "s"}`;
-  renderDeviceViews(visibleDevices);
+  if (state.renderCache.heroGuard !== heroGuardSignature) {
+    renderHeroGuard(data.routingGuard || {});
+    state.renderCache.heroGuard = heroGuardSignature;
+  }
+  if (state.renderCache.summaryStats !== summaryStatsSignature) {
+    renderSummaryStats(summaryStats);
+    state.renderCache.summaryStats = summaryStatsSignature;
+  }
+  if (state.renderCache.contextBar !== contextSignature) {
+    renderContextBar(data.devices || [], visibleDevices);
+    state.renderCache.contextBar = contextSignature;
+  }
+  if (state.renderCache.routers !== routersSignature) {
+    renderRouters(data.routers || []);
+    state.renderCache.routers = routersSignature;
+  }
+  if (state.renderCache.queue !== queueSignature) {
+    renderQueuePanel(data);
+    state.renderCache.queue = queueSignature;
+  }
+  if (state.renderCache.activity !== activitySignature) {
+    renderActivityFeed(data.recentActivity || []);
+    state.renderCache.activity = activitySignature;
+  }
+  if (state.renderCache.routingAudit !== routingAuditSignature) {
+    renderRoutingAudit(data.routingAudit || { overallOk: false, summary: "Routing audit has not completed yet.", checks: [] }, data.routingGuard || {});
+    state.renderCache.routingAudit = routingAuditSignature;
+  }
+  if (state.renderCache.deviceCount !== deviceCountSignature) {
+    setTextIfChanged(deviceCount, `${visibleDevices.length} visible device${visibleDevices.length === 1 ? "" : "s"}`);
+    state.renderCache.deviceCount = deviceCountSignature;
+  }
+  if (state.renderCache.deviceViews !== deviceViewsSignature) {
+    renderDeviceViews(visibleDevices);
+    state.renderCache.deviceViews = deviceViewsSignature;
+  }
 }
 
 function buildEmptyData() {
@@ -226,7 +536,7 @@ function buildEmptyData() {
 }
 
 function syncControls() {
-  searchInput.value = state.filters.search ? state.filters.search : searchInput.value;
+  searchInput.value = state.filters.search || "";
   statusFilter.value = state.filters.status;
   roleFilter.value = state.filters.role;
   warningsOnlyToggle.checked = state.filters.warningsOnly;
@@ -235,8 +545,8 @@ function syncControls() {
 
 function renderHeroGuard(routingGuard) {
   const blocked = Boolean(routingGuard?.blocked);
-  routeGuardBadge.textContent = blocked ? "Prep Guard Blocked" : "Prep Guard Clear";
-  routeGuardBadge.className = `badge ${blocked ? "badge-failed" : "badge-ready"}`;
+  setTextIfChanged(routeGuardBadge, blocked ? "Prep Guard Blocked" : "Prep Guard Clear");
+  setClassIfChanged(routeGuardBadge, `badge ${blocked ? "badge-failed" : "badge-ready"}`);
 }
 
 function buildSummaryStats(devices) {
@@ -543,111 +853,133 @@ function renderDeviceViews(devices = filterDevices((state.data?.devices) || []))
 }
 
 function renderCardView(devices) {
-  cardView.innerHTML = "";
-  if (!devices.length) {
-    cardView.innerHTML = `<div class="empty-state">No devices match the current filters.</div>`;
+  const safeDevices = (devices || []).filter(Boolean);
+  if (!safeDevices.length) {
+    cardView.replaceChildren(createEmptyStateElement("div", "empty-state", "No devices match the current filters."));
     return;
   }
 
+  const existingCards = mapChildrenBySerial(cardView, ".device-card[data-serial]");
   const fragment = document.createDocumentFragment();
-  for (const device of devices) {
-    fragment.appendChild(renderDeviceCard(device));
+  for (const device of safeDevices) {
+    const signature = buildDeviceSignature(device);
+    const existing = existingCards.get(device.serial);
+    if (existing && existing.dataset.renderSig === signature) {
+      fragment.appendChild(existing);
+      continue;
+    }
+    fragment.appendChild(createDeviceCardElement(device, signature));
   }
-  cardView.appendChild(fragment);
+  cardView.replaceChildren(fragment);
 }
 
 function renderTableView(devices) {
-  deviceTableBody.innerHTML = "";
-  if (!devices.length) {
-    deviceTableBody.innerHTML = `<tr><td colspan="13" class="table-empty">No devices match the current filters.</td></tr>`;
+  const safeDevices = (devices || []).filter(Boolean);
+  if (!safeDevices.length) {
+    deviceTableBody.replaceChildren(createEmptyStateElement("tr", "table-empty", "No devices match the current filters.", 13));
     return;
   }
 
+  const existingRows = mapChildrenBySerial(deviceTableBody, "tr[data-serial]");
   const fragment = document.createDocumentFragment();
-  for (const device of devices) {
-    const row = document.createElement("tr");
-    row.className = `table-row prep-${device.prepState || "idle"}`;
-    row.innerHTML = `
-      <td>
-        <div class="table-device-cell">
-          <strong>${escapeHtml(formatDeviceName(device))}</strong>
-          <small>${escapeHtml(device.serial)}</small>
-          <div class="table-subline table-subline-strong">${escapeHtml(device.transportId || device.serial)}</div>
-        </div>
-      </td>
-      <td>
-        <div class="table-stack">
-          <strong class="table-code">${escapeHtml(device.serial)}</strong>
-          <span class="table-subline">${escapeHtml(device.model || "Unknown model")}</span>
-        </div>
-      </td>
-      <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
-      <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
-      <td>
-        <div class="table-stack">
-          <strong>${escapeHtml(device.routerLabel || device.routerId || "Unassigned")}</strong>
-          <span class="table-subline">${escapeHtml(device.routerSlot ? `Slot ${device.routerSlot}` : "No slot")}</span>
-        </div>
-      </td>
-      <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
-      <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}<div class="table-subline">${escapeHtml(formatPrepTimer(device))}</div><div class="table-subline">${escapeHtml(formatViewerLaunch(device.viewerLaunch))}</div></td>
-      <td>
-        <div class="table-stack">
-          <strong>${escapeHtml(formatPrepProgressLabel(device))}</strong>
-          <div class="prep-progress prep-progress-compact" aria-hidden="true">
-            <div class="prep-progress-bar" style="width: ${computePrepProgress(device.prepElapsedMs || device.queueWaitMs || 0, device.prepState)}%"></div>
-          </div>
-        </div>
-      </td>
-      <td>
-        <div class="table-stack">
-          <strong>${escapeHtml(formatGmail(device.account))}</strong>
-          <span class="table-subline">${escapeHtml(device.account?.status || "unknown")}</span>
-        </div>
-      </td>
-      <td>
-        <div class="table-stack">
-          <strong class="table-code">${escapeHtml(device.publicIp?.currentIp || "Not checked")}</strong>
-          <span class="table-subline">${escapeHtml((device.publicIp?.status || "unknown").toUpperCase())}</span>
-        </div>
-      </td>
-      <td>
-        <div class="table-stack">
-          <strong>${escapeHtml(device.publicIp?.lastCheckedAt ? formatShortTime(device.publicIp.lastCheckedAt) : "-")}</strong>
-          <span class="table-subline">${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "No successful check")}</span>
-        </div>
-      </td>
-      <td>
-        <div class="table-warning ${hasWarning(device) ? "table-warning-active" : ""}">
-          <strong>${escapeHtml(isReused(device) ? "Cross-device IP reuse" : (device.routingRisk?.label || deviceWarningLabel(device)))}</strong>
-          <span class="table-subline">${escapeHtml(buildCompactWarning(device))}</span>
-        </div>
-      </td>
-      <td>
-        <div class="table-actions">
-          ${renderTableActionButton(device, "open-control", "Open")}
-          ${renderTableActionButton(device, "prep", "Prep", true)}
-          ${renderTableActionButton(device, "connect-router", "Connect")}
-          ${renderTableActionButton(device, "reset-uplink-ip", "Reset IP")}
-          ${renderTableActionButton(device, "engage-airplane", "Airplane")}
-          ${renderTableActionButton(device, "recover-radios", "Recover")}
-          ${renderTableActionButton(device, "check-ip", "IP")}
-          ${renderTableActionButton(device, "start-session", "Start")}
-          ${renderTableActionButton(device, "stop-session", "Stop")}
-        </div>
-      </td>
-    `;
-
-    row.querySelectorAll("[data-action]").forEach(button => {
-      if (shouldDisableAction(device, button.dataset.action)) {
-        button.disabled = true;
-      }
-      button.addEventListener("click", () => invokeDeviceAction(device.serial, button.dataset.action));
-    });
-
-    fragment.appendChild(row);
+  for (const device of safeDevices) {
+    const signature = buildDeviceSignature(device);
+    const existing = existingRows.get(device.serial);
+    if (existing && existing.dataset.renderSig === signature) {
+      fragment.appendChild(existing);
+      continue;
+    }
+    fragment.appendChild(createDeviceTableRow(device, signature));
   }
-  deviceTableBody.appendChild(fragment);
+  deviceTableBody.replaceChildren(fragment);
+}
+
+function createDeviceTableRow(device, signature = buildDeviceSignature(device)) {
+  const row = document.createElement("tr");
+  row.dataset.serial = device.serial;
+  row.dataset.renderSig = signature;
+  row.className = `table-row prep-${device.prepState || "idle"}`;
+  row.innerHTML = `
+    <td>
+      <div class="table-device-cell">
+        <strong>${escapeHtml(formatDeviceName(device))}</strong>
+        <small>${escapeHtml(device.serial)}</small>
+        <div class="table-subline table-subline-strong">${escapeHtml(device.transportId || device.serial)}</div>
+      </div>
+    </td>
+    <td>
+      <div class="table-stack">
+        <strong class="table-code">${escapeHtml(device.serial)}</strong>
+        <span class="table-subline">${escapeHtml(device.model || "Unknown model")}</span>
+      </div>
+    </td>
+    <td>${renderBadgeMarkup(device.online ? "Online" : "Offline", device.online ? "badge-online" : "badge-offline")}</td>
+    <td>${renderBadgeMarkup(formatRole(device.role), "badge-neutral")}</td>
+    <td>
+      <div class="table-stack">
+        <strong>${escapeHtml(device.routerLabel || device.routerId || "Unassigned")}</strong>
+        <span class="table-subline">${escapeHtml(device.routerSlot ? `Slot ${device.routerSlot}` : "No slot")}</span>
+      </div>
+    </td>
+    <td>${renderBadgeMarkup(formatSession(device.sessionState), sessionBadgeClass(device.sessionState))}</td>
+    <td>${renderBadgeMarkup((device.prepState || "idle").toUpperCase(), prepBadgeClass(device.prepState))}<div class="table-subline">${escapeHtml(formatPrepTimer(device))}</div><div class="table-subline">${escapeHtml(formatViewerLaunch(device.viewerLaunch))}</div></td>
+    <td>
+      <div class="table-stack">
+        <strong>${escapeHtml(formatPrepProgressLabel(device))}</strong>
+        <div class="prep-progress prep-progress-compact" aria-hidden="true">
+          <div class="prep-progress-bar" style="width: ${computePrepProgress(device.prepElapsedMs || device.queueWaitMs || 0, device.prepState)}%"></div>
+        </div>
+      </div>
+    </td>
+    <td>
+      <div class="table-stack">
+        <strong>${escapeHtml(formatGmail(device.account))}</strong>
+        <span class="table-subline">${escapeHtml(device.account?.status || "unknown")}</span>
+      </div>
+    </td>
+    <td>
+      <div class="table-stack">
+        <strong class="table-code">${escapeHtml(device.publicIp?.currentIp || "Not checked")}</strong>
+        <span class="table-subline">${escapeHtml((device.publicIp?.status || "unknown").toUpperCase())}</span>
+      </div>
+    </td>
+    <td>
+      <div class="table-stack">
+        <strong>${escapeHtml(device.publicIp?.lastCheckedAt ? formatShortTime(device.publicIp.lastCheckedAt) : "-")}</strong>
+        <span class="table-subline">${escapeHtml(device.publicIp?.lastCheckedAt ? formatDateTime(device.publicIp.lastCheckedAt) : "No successful check")}</span>
+      </div>
+    </td>
+    <td>
+      <div class="table-warning ${hasWarning(device) ? "table-warning-active" : ""}">
+        <strong>${escapeHtml(isReused(device) ? "Cross-device IP reuse" : (device.routingRisk?.label || deviceWarningLabel(device)))}</strong>
+        <span class="table-subline">${escapeHtml(buildCompactWarning(device))}</span>
+      </div>
+    </td>
+    <td>
+      <div class="table-actions">
+        <button class="table-action" data-editor="true">Edit</button>
+        ${renderTableActionButton(device, "open-control", "Open")}
+        ${renderTableActionButton(device, "prep", "Prep", true)}
+        ${renderTableActionButton(device, "connect-router", "Connect")}
+        ${renderTableActionButton(device, "reset-uplink-ip", "Reset IP")}
+        ${renderTableActionButton(device, "engage-airplane", "Airplane")}
+        ${renderTableActionButton(device, "recover-radios", "Recover")}
+        ${renderTableActionButton(device, "check-ip", "IP")}
+        ${renderTableActionButton(device, "start-session", "Start")}
+        ${renderTableActionButton(device, "stop-session", "Stop")}
+      </div>
+    </td>
+  `;
+
+  row.querySelector("[data-editor='true']")?.addEventListener("click", () => openDeviceEditor(device.serial));
+  row.querySelectorAll("[data-action]").forEach(button => {
+    if (shouldDisableAction(device, button.dataset.action)) {
+      button.disabled = true;
+    }
+    button.addEventListener("click", () => invokeDeviceAction(device.serial, button.dataset.action));
+  });
+
+  return row;
 }
 
 function renderTableActionButton(device, action, label, primary = false) {
@@ -657,6 +989,9 @@ function renderTableActionButton(device, action, label, primary = false) {
 }
 
 function buildCompactWarning(device) {
+  if (!device.online) {
+    return "This phone is offline in ADB and cannot be prepped until it reconnects.";
+  }
   if (!device.routerId) {
     return "This phone is not assigned to an Opal router yet.";
   }
@@ -680,6 +1015,9 @@ function buildCompactWarning(device) {
 }
 
 function renderDeviceCard(device) {
+  if (!device || !template?.content) {
+    return document.createDocumentFragment();
+  }
   const fragment = template.content.cloneNode(true);
   const root = fragment.querySelector(".device-card");
   const kicker = fragment.querySelector(".device-kicker");
@@ -747,6 +1085,7 @@ function renderDeviceCard(device) {
   if (device.prepState === "failed") root.classList.add("is-failed");
 
   bindCardAction(fragment.querySelector(".action-open"), device, "open-control", "Open Control");
+  bindEditorAction(fragment.querySelector(".action-edit"), device);
   bindCardAction(fragment.querySelector(".action-prep"), device, "prep", "Prep Device");
   bindCardAction(fragment.querySelector(".action-connect-router"), device, "connect-router", "Connect Router");
   bindCardAction(fragment.querySelector(".action-reset-uplink"), device, "reset-uplink-ip", "Reset Uplink");
@@ -759,11 +1098,37 @@ function renderDeviceCard(device) {
   return fragment;
 }
 
+function createDeviceCardElement(device, signature = buildDeviceSignature(device)) {
+  const fragment = renderDeviceCard(device);
+  const root = fragment.querySelector(".device-card");
+  if (!root) {
+    const fallback = document.createElement("article");
+    fallback.className = "device-card";
+    fallback.dataset.serial = device?.serial || "";
+    fallback.dataset.renderSig = signature;
+    fallback.textContent = device?.serial ? `Unable to render ${device.serial}` : "Unable to render device";
+    return fallback;
+  }
+  root.dataset.serial = device.serial;
+  root.dataset.renderSig = signature;
+  return root;
+}
+
 function bindCardAction(button, device, action, label) {
+  if (!button || !device?.serial) {
+    return;
+  }
   const busy = isActionPending(device.serial, action);
   button.disabled = shouldDisableAction(device, action);
   button.textContent = busy ? "Working..." : label;
   button.addEventListener("click", () => invokeDeviceAction(device.serial, action));
+}
+
+function bindEditorAction(button, device) {
+  if (!button || !device?.serial) {
+    return;
+  }
+  button.addEventListener("click", () => openDeviceEditor(device.serial));
 }
 
 function filterDevices(devices) {
@@ -825,6 +1190,7 @@ function buildIpHistorySummary(device) {
 }
 
 function deviceWarningLabel(device) {
+  if (!device.online) return "Offline";
   if (!device.routerId) return "Router Needed";
   if (isDuplicate(device)) return "Duplicate IP";
   if (isReused(device)) return "Reused IP";
@@ -845,9 +1211,14 @@ function buildRouterReachability(router) {
 }
 
 function shouldDisableAction(device, action) {
+  if (!device?.serial) return true;
   if (isActionPending(device.serial, action)) return true;
   if (action === "prep") {
-    return device.prepState === "queued" || device.prepState === "preparing" || Boolean(state.data?.routingGuard?.blocked);
+    return !device.online ||
+      device.sessionState === "running" ||
+      device.prepState === "queued" ||
+      device.prepState === "preparing" ||
+      Boolean(state.data?.routingGuard?.blocked);
   }
   if (action === "start-session") {
     return Boolean(state.data?.routingGuard?.blocked) || !device.activationLock?.allowed;
@@ -888,7 +1259,20 @@ function isOperatorEvent(event) {
 async function invokeDeviceAction(serial, action, body = {}) {
   const pendingKey = `${serial}:${action}`;
   state.pendingActions[pendingKey] = true;
-  render();
+  try {
+    render();
+  } catch (error) {
+    delete state.pendingActions[pendingKey];
+    console.error("Device action preflight render failed", { serial, action, error });
+    reportClientError({
+      source: "invokeDeviceAction:preflight-render",
+      message: error?.message || "Action preflight render failed",
+      detail: error?.stack || "",
+      serial
+    });
+    window.alert(error?.message || "Action preflight failed");
+    return;
+  }
 
   try {
     if (desktopBridge?.isDesktopApp && (action === "open-control" || action === "start-session")) {
@@ -897,21 +1281,23 @@ async function invokeDeviceAction(serial, action, body = {}) {
       return;
     }
 
-    const response = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/${action}`), {
+    const response = await apiRequest(`/api/devices/${encodeURIComponent(serial)}/${action}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-      body: JSON.stringify(body)
+      body
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Action failed" }));
-      throw new Error(error.error || "Action failed");
+      throw new Error(response.payload?.error || "Action failed");
     }
 
     await refresh();
   } catch (error) {
+    reportClientError({
+      source: `invokeDeviceAction:${action}`,
+      message: error?.message || "Action failed",
+      detail: error?.stack || "",
+      serial
+    });
     window.alert(error.message || "Action failed");
   } finally {
     delete state.pendingActions[pendingKey];
@@ -919,19 +1305,106 @@ async function invokeDeviceAction(serial, action, body = {}) {
   }
 }
 
+function getDeviceBySerial(serial) {
+  return (state.data?.devices || []).find(device => device.serial === serial) || null;
+}
+
+function openDeviceEditor(serial) {
+  const device = getDeviceBySerial(serial);
+  if (!device || !deviceEditorModal) {
+    return;
+  }
+  state.editor.serial = serial;
+  state.editor.saving = false;
+  const routers = (state.data?.routers || []).slice().sort((a, b) => String(a.label || a.id).localeCompare(String(b.label || b.id)));
+  editorRouterId.innerHTML = [
+    `<option value="">Unassigned</option>`,
+    ...routers.map(router => `<option value="${escapeHtml(router.id)}">${escapeHtml(router.label || router.id)}</option>`)
+  ].join("");
+  deviceEditorTitle.textContent = `Edit ${formatDeviceName(device)}`;
+  deviceEditorSubtitle.textContent = `${device.serial} ${device.transportId ? `| Transport ${device.transportId}` : ""}`.trim();
+  editorNickname.value = device.nickname || "";
+  editorPhoneNumber.value = device.phoneNumber || "";
+  editorRole.value = device.role || "sim-direct";
+  editorRouterId.value = device.routerId || "";
+  editorRouterSlot.value = device.routerSlot || "";
+  editorParentHotspotSerial.value = device.parentHotspotSerial || "";
+  deviceEditorSaveButton.textContent = "Save Device";
+  setEditorBusy(false);
+  deviceEditorModal.hidden = false;
+}
+
+function closeDeviceEditor() {
+  if (!deviceEditorModal) {
+    return;
+  }
+  state.editor.serial = null;
+  state.editor.saving = false;
+  deviceEditorModal.hidden = true;
+}
+
+function setEditorBusy(busy) {
+  state.editor.saving = busy;
+  if (!deviceEditorForm) {
+    return;
+  }
+  deviceEditorForm.querySelectorAll("input, select, button").forEach(control => {
+    if (control.id === "deviceEditorCloseButton" || control.id === "deviceEditorCancelButton") {
+      control.disabled = false;
+      return;
+    }
+    control.disabled = busy;
+  });
+  if (deviceEditorSaveButton) {
+    deviceEditorSaveButton.textContent = busy ? "Saving..." : "Save Device";
+  }
+}
+
+async function saveDeviceMetadata() {
+  const serial = state.editor.serial;
+  if (!serial) {
+    return;
+  }
+
+  setEditorBusy(true);
+  try {
+    const response = await apiRequest(`/api/devices/${encodeURIComponent(serial)}/metadata`, {
+      method: "POST",
+      body: {
+        nickname: editorNickname.value.trim(),
+        phoneNumber: editorPhoneNumber.value ? Number(editorPhoneNumber.value) : null,
+        role: editorRole.value,
+        routerId: editorRouterId.value,
+        routerSlot: editorRouterSlot.value ? Number(editorRouterSlot.value) : null,
+        parentHotspotSerial: editorParentHotspotSerial.value.trim()
+      }
+    });
+    if (!response.ok) {
+      throw new Error(response.payload?.error || "Device update failed");
+    }
+    await refresh();
+    closeDeviceEditor();
+  } catch (error) {
+    reportClientError({
+      source: "saveDeviceMetadata",
+      message: error?.message || "Device metadata save failed",
+      detail: error?.stack || "",
+      serial
+    });
+    window.alert(error.message || "Device update failed");
+    setEditorBusy(false);
+  }
+}
+
 async function invokeRouterAction(routerId, action, body = {}) {
   try {
-    const response = await fetch(apiPath(`/api/routers/${encodeURIComponent(routerId)}/${action}`), {
+    const response = await apiRequest(`/api/routers/${encodeURIComponent(routerId)}/${action}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-      body: JSON.stringify(body)
+      body
     });
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: "Router action failed" }));
-      throw new Error(error.error || "Router action failed");
+    if (!response.ok && action !== "router-health") {
+      throw new Error(response.payload?.error || "Router action failed");
     }
 
     await refresh();
@@ -942,45 +1415,39 @@ async function invokeRouterAction(routerId, action, body = {}) {
 
 async function invokeDesktopViewerAction(serial, action, body = {}) {
   if (action === "start-session") {
-    const startResponse = await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/start-session`), {
+    const startResponse = await apiRequest(`/api/devices/${encodeURIComponent(serial)}/start-session`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "same-origin",
-      cache: "no-store",
-      body: JSON.stringify({ ...body, skipViewerLaunch: true })
+      body: { ...body, skipViewerLaunch: true }
     });
 
     if (!startResponse.ok) {
-      const error = await startResponse.json().catch(() => ({ error: "Session start failed" }));
-      throw new Error(error.error || "Session start failed");
+      throw new Error(startResponse.payload?.error || "Session start failed");
     }
   }
 
   try {
     const nativeLaunch = await desktopBridge.launchViewer(serial);
+    const launch = nativeLaunch || {};
     await desktopBridge.syncViewerState({
       serial,
       sourceAction: action,
-      status: nativeLaunch.fallbackViewer ? "fallback" : (nativeLaunch.windowReady ? "confirmed" : "unverified"),
+      status: launch.fallbackViewer ? "fallback" : (launch.windowReady ? "confirmed" : "unverified"),
       requestedAt: new Date().toISOString(),
-      confirmedAt: nativeLaunch.startedAt || new Date().toISOString(),
-      pid: nativeLaunch.pid || null,
-      processName: nativeLaunch.processName || "",
-      filePath: nativeLaunch.filePath || "",
-      aliveAfterLaunch: Boolean(nativeLaunch.aliveAfterLaunch),
-      windowReady: Boolean(nativeLaunch.windowReady),
-      fallbackViewer: nativeLaunch.fallbackViewer || "",
-      manualSelectionRequired: Boolean(nativeLaunch.manualSelectionRequired),
-      lastError: nativeLaunch.fallbackViewer ? (nativeLaunch.scrcpyError || "") : ""
+      confirmedAt: launch.startedAt || new Date().toISOString(),
+      pid: launch.pid || null,
+      processName: launch.processName || "",
+      filePath: launch.filePath || "",
+      aliveAfterLaunch: Boolean(launch.aliveAfterLaunch),
+      windowReady: Boolean(launch.windowReady),
+      fallbackViewer: launch.fallbackViewer || "",
+      manualSelectionRequired: Boolean(launch.manualSelectionRequired),
+      lastError: launch.fallbackViewer ? (launch.scrcpyError || "") : ""
     });
   } catch (error) {
     if (action === "start-session") {
-      await fetch(apiPath(`/api/devices/${encodeURIComponent(serial)}/stop-session`), {
+      await apiRequest(`/api/devices/${encodeURIComponent(serial)}/stop-session`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "same-origin",
-        cache: "no-store",
-        body: JSON.stringify({})
+        body: {}
       }).catch(() => undefined);
     }
     throw error;

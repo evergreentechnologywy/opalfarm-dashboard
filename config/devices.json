@@ -61,7 +61,9 @@
       "phoneNumber": 9,
       "nickname": "Phone 09",
       "role": "sim-direct",
-      "parentHotspotSerial": ""
+      "parentHotspotSerial": "",
+      "routerId": "",
+      "routerSlot": null
     },
     {
       "serial": "23BFC639",
@@ -139,6 +141,42 @@
       "nickname": "Phone 20",
       "role": "sim-direct",
       "parentHotspotSerial": ""
+    },
+    {
+      "serial": "23A2C618",
+      "phoneNumber": 21,
+      "nickname": "Phone 21",
+      "role": "sim-direct",
+      "parentHotspotSerial": "",
+      "routerId": "",
+      "routerSlot": null
+    },
+    {
+      "serial": "23BFC671",
+      "phoneNumber": 22,
+      "nickname": "Phone 22",
+      "role": "sim-direct",
+      "parentHotspotSerial": "",
+      "routerId": "",
+      "routerSlot": null
+    },
+    {
+      "serial": "6FA09768",
+      "phoneNumber": 23,
+      "nickname": "Phone 23",
+      "role": "sim-direct",
+      "parentHotspotSerial": "",
+      "routerId": "",
+      "routerSlot": null
+    },
+    {
+      "serial": "A6B2AA09",
+      "phoneNumber": 24,
+      "nickname": "Phone 24",
+      "role": "sim-direct",
+      "parentHotspotSerial": "",
+      "routerId": "",
+      "routerSlot": null
     }
   ]
 }

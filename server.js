@@ -39,6 +39,11 @@ const DEFAULT_SETTINGS = {
   pollIntervalMs: 5000,
   ipRefreshIntervalMs: 15000,
   routerRefreshIntervalMs: 20000,
+  deviceRefresh: {
+    networkChecksPerPass: 4,
+    accountChecksPerPass: 2,
+    accountRefreshIntervalMs: 30000
+  },
   prep: {
     minWaitSeconds: 25,
     maxWaitSeconds: 45,
@@ -100,9 +105,10 @@ let preparingSerial = null;
 let deviceCache = {};
 let routerCache = {};
 let routerHealthRefreshInFlight = false;
-let lastIpRefreshAt = 0;
-let lastAccountRefreshAt = 0;
 let lastRoutingAuditAt = 0;
+let stateSaveTimer = null;
+let routingAuditCache = null;
+let routingAuditCacheMtimeMs = 0;
 let deviceIpHistory = loadJson(DEVICE_IP_HISTORY_PATH, DEFAULT_IP_HISTORY);
 const missingTools = new Set();
 const sessions = new Map();
@@ -119,19 +125,23 @@ fs.writeFileSync(PID_PATH, String(process.pid));
 
 process.on("exit", cleanupPid);
 process.on("SIGINT", () => {
+  flushStateSave();
   cleanupPid();
   process.exit(0);
 });
 process.on("SIGTERM", () => {
+  flushStateSave();
   cleanupPid();
   process.exit(0);
 });
 
 logActivity("system", "OpalFarm dashboard starting");
+reconcilePrepState();
 refreshDevices();
 refreshRouters();
 refreshRouterHealth();
 safeRefreshRoutingAudit();
+processPrepQueue();
 setInterval(refreshDevices, settings.pollIntervalMs || 5000);
 setInterval(refreshRouters, settings.routerRefreshIntervalMs || 20000);
 setInterval(refreshRouterHealth, settings.routerRefreshIntervalMs || 20000);
@@ -185,6 +195,17 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/logs/recent") {
       return sendJson(res, 200, { recentActivity: filterRecentActivityForUser(user) });
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/client-log") {
+      const body = await readJsonBody(req);
+      const level = String(body.level || "error").trim() || "error";
+      const source = String(body.source || "renderer").trim() || "renderer";
+      const message = String(body.message || "Unknown client error").trim() || "Unknown client error";
+      const serial = body.serial ? String(body.serial) : null;
+      const detail = body.detail ? ` | ${String(body.detail)}` : "";
+      logActivity(level === "warning" ? "client-warning" : "client-error", `${source}: ${message}${detail}`, serial);
+      return sendJson(res, 200, { ok: true });
     }
 
     if (req.method === "POST" && url.pathname === "/api/config/reload") {
@@ -260,6 +281,21 @@ function writeJsonIfMissing(filePath, data) {
 }
 
 function saveState() {
+  if (stateSaveTimer) {
+    clearTimeout(stateSaveTimer);
+  }
+  stateSaveTimer = setTimeout(() => {
+    stateSaveTimer = null;
+    fs.writeFileSync(STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
+  }, 150);
+}
+
+function flushStateSave() {
+  if (!stateSaveTimer) {
+    return;
+  }
+  clearTimeout(stateSaveTimer);
+  stateSaveTimer = null;
   fs.writeFileSync(STATE_PATH, `${JSON.stringify(state, null, 2)}\n`);
 }
 
@@ -410,7 +446,38 @@ function getAssignedDevicesForRouter(routerId) {
 }
 
 function getActiveSession() {
-  const runningDevices = Object.values(deviceCache).filter(device => device.sessionState === "running");
+  return getActiveSessionFromDevices(Object.values(deviceCache));
+}
+
+function reconcilePrepState() {
+  const queue = Array.isArray(state.queue) ? state.queue.filter(Boolean) : [];
+  state.queue = Array.from(new Set(queue));
+
+  for (const [serial, device] of Object.entries(state.devices || {})) {
+    if (!device) {
+      continue;
+    }
+
+    if (device.prepState === "queued" && !state.queue.includes(serial)) {
+      state.queue.push(serial);
+      continue;
+    }
+
+    if (device.prepState === "preparing") {
+      state.devices[serial] = {
+        ...device,
+        prepState: "failed",
+        prepFinishedAt: new Date().toISOString(),
+        prepMessage: "Prep was interrupted and needs to be started again."
+      };
+    }
+  }
+
+  saveState();
+}
+
+function getActiveSessionFromDevices(devices) {
+  const runningDevices = (devices || []).filter(device => device?.sessionState === "running");
   if (!runningDevices.length) {
     return null;
   }
@@ -534,6 +601,18 @@ function formatPhoneNumber(phoneNumber) {
   return `Phone ${String(phoneNumber).padStart(2, "0")}`;
 }
 
+function parsePositiveIntegerOrNull(value) {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  const parsed = Number(normalized);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return null;
+  }
+  return parsed;
+}
+
 function ensureDeviceNumberAssignment(serial) {
   const existing = getDeviceConfig(serial);
   const currentNumber = Number(existing.phoneNumber);
@@ -552,12 +631,14 @@ function ensureDeviceNumberAssignment(serial) {
 function buildStatus(user) {
   const routingAudit = loadRoutingAudit();
   const routingGuard = buildRoutingGuard(routingAudit);
-  const visibleDevices = applyDuplicateFlags(filterDevicesForUser(user)).map(device => enrichDeviceForStatus(device, routingAudit));
+  const filteredDevices = filterDevicesForUser(user);
+  const activeSession = getActiveSession();
+  const visibleDevices = applyDuplicateFlags(filteredDevices)
+    .map(device => enrichDeviceForStatus(device, routingAudit, routingGuard, activeSession));
   const visibleSerials = new Set(visibleDevices.map(device => device.serial));
   const visibleQueue = (state.queue || []).filter(serial => visibleSerials.has(serial));
   const visiblePreparing = preparingSerial && visibleSerials.has(preparingSerial) ? preparingSerial : null;
   const routers = buildRouterStatuses(visibleDevices);
-  const activeSession = getActiveSession();
   return {
     ok: true,
     user: sanitizeUser(user),
@@ -669,9 +750,11 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
   const routingGuard = buildRoutingGuard(loadRoutingAudit());
   if (action === "metadata") {
     const nextRouterId = String(body.routerId || "").trim();
-    const nextRouterSlot = Number.isFinite(Number(body.routerSlot)) ? Number(body.routerSlot) : null;
+    const nextRouterSlot = parsePositiveIntegerOrNull(body.routerSlot);
+    const nextPhoneNumber = parsePositiveIntegerOrNull(body.phoneNumber);
     upsertDeviceConfig(serial, {
       nickname: String(body.nickname || "").trim(),
+      phoneNumber: nextPhoneNumber,
       role: String(body.role || "sim-direct").trim() || "sim-direct",
       parentHotspotSerial: String(body.parentHotspotSerial || "").trim(),
       routerId: nextRouterId,
@@ -829,7 +912,8 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     });
 
     const payload = parseJsonPayload(script.stdout);
-    if (script.status !== 0 || !payload?.ok) {
+    const manualAssist = Boolean(payload?.requiresManualAssist);
+    if ((script.status !== 0 || !payload?.ok) && !manualAssist) {
       const errorMessage = payload?.message || String(script.stderr || script.stdout || "").trim() || "Phone-to-router connect failed.";
       updateDeviceState(serial, { prepMessage: errorMessage });
       logActivity("router-connect", `Phone-to-router connect failed: ${errorMessage}`, serial);
@@ -837,10 +921,12 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     }
 
     updateDeviceState(serial, {
-      prepMessage: `Router Wi-Fi connect requested for ${router.label || router.id}`
+      prepMessage: payload?.message || `Router Wi-Fi connect requested for ${router.label || router.id}`
     });
-    logActivity("router-connect", `Phone-to-router connect requested by ${user.username} for ${router.label || router.id}`, serial);
-    return sendJson(res, 200, { ok: true, detail: payload });
+    logActivity("router-connect", manualAssist
+      ? `Phone-to-router connect requires manual completion for ${router.label || router.id}`
+      : `Phone-to-router connect requested by ${user.username} for ${router.label || router.id}`, serial);
+    return sendJson(res, 200, { ok: true, manualAssist, detail: payload });
   }
 
   if (action === "reset-uplink-ip") {
@@ -858,14 +944,25 @@ async function handleDeviceActionAsync(res, user, serial, action, body) {
     if (routingGuard.blocked) {
       return sendJson(res, 409, { error: `Prep blocked: ${routingGuard.reasons.join(" | ")}`, routingGuard });
     }
-    if ((state.queue || []).includes(serial) || preparingSerial === serial) {
-      return sendJson(res, 409, { error: "Device already queued or preparing" });
+    if (!knownDevice.online) {
+      return sendJson(res, 409, { error: "Device must be online in ADB before prep." });
+    }
+    if (knownDevice.sessionState === "running") {
+      return sendJson(res, 409, { error: "Stop the active session before starting prep." });
+    }
+    if ((state.queue || []).includes(serial)) {
+      return sendJson(res, 200, { ok: true, alreadyQueued: true });
+    }
+    if (preparingSerial === serial) {
+      return sendJson(res, 200, { ok: true, alreadyPreparing: true });
     }
     state.queue = [...(state.queue || []), serial];
     updateDeviceState(serial, {
       prepState: "queued",
       prepMessage: "Queued for prep",
-      prepEnqueuedAt: new Date().toISOString()
+      prepEnqueuedAt: new Date().toISOString(),
+      prepStartedAt: "",
+      prepFinishedAt: ""
     });
     logActivity("queue", `Device added to prep queue by ${user.username}`, serial);
     processPrepQueue();
@@ -914,6 +1011,15 @@ async function handleRouterAction(res, user, routerId, action, body) {
   saveState();
   refreshRouters();
   logActivity("router", `${router.label || router.id} ${action} ${ok ? "completed" : "failed"} by ${user.username}`, null);
+
+  if (action === "router-health") {
+    return sendJson(res, 200, {
+      ok,
+      detail: payload || null,
+      router: routerCache[routerId] || null,
+      error: ok ? "" : (payload?.message || "Router health probe failed")
+    });
+  }
 
   if (!ok) {
     return sendJson(res, 500, { error: payload?.message || "Router action failed", detail: payload || null, router: routerCache[routerId] || null });
@@ -965,7 +1071,7 @@ function buildMissingDevice(serial) {
     role: deviceConfig.role || "sim-direct",
     parentHotspotSerial: deviceConfig.parentHotspotSerial || "",
     routerId: deviceConfig.routerId || "",
-    routerSlot: Number.isFinite(Number(deviceConfig.routerSlot)) ? Number(deviceConfig.routerSlot) : null,
+      routerSlot: parsePositiveIntegerOrNull(deviceConfig.routerSlot),
     network: state.devices?.[serial]?.network || {
       ipAddress: "",
       interface: "",
@@ -1014,28 +1120,55 @@ function refreshDevices() {
   const previous = deviceCache;
   const rows = queryAdbDevices();
   const next = {};
-  const shouldRefreshNetwork = Date.now() - lastIpRefreshAt >= (settings.ipRefreshIntervalMs || 15000);
-  const shouldRefreshAccounts = Date.now() - lastAccountRefreshAt >= 30000;
+  const networkRefreshSet = selectProbeRefreshSerials(
+    rows,
+    previous,
+    "network",
+    Number(settings.ipRefreshIntervalMs) || 15000,
+    Number(settings.deviceRefresh?.networkChecksPerPass) || 4
+  );
+  const accountRefreshSet = selectProbeRefreshSerials(
+    rows,
+    previous,
+    "account",
+    Number(settings.deviceRefresh?.accountRefreshIntervalMs) || 30000,
+    Number(settings.deviceRefresh?.accountChecksPerPass) || 2
+  );
 
   for (const row of rows) {
     const stored = state.devices[row.serial] || {};
     const metadata = ensureDeviceNumberAssignment(row.serial);
-    const network = shouldRefreshNetwork
-      ? queryDeviceNetwork(row.serial, row.state === "device")
-      : (stored.network || previous[row.serial]?.network || {
-          ipAddress: "",
-          interface: "",
-          source: "",
-          status: row.state === "device" ? "pending" : "offline",
-          checkedAt: ""
-        });
-    const account = shouldRefreshAccounts
-      ? queryDeviceGoogleAccount(row.serial, row.state === "device")
-      : (stored.account || previous[row.serial]?.account || {
-          gmail: "",
-          status: row.state === "device" ? "unknown" : "offline",
-          checkedAt: ""
-        });
+    const fallbackNetwork = {
+      ipAddress: "",
+      interface: "",
+      source: "",
+      status: row.state === "device" ? "pending" : "offline",
+      checkedAt: ""
+    };
+    const fallbackAccount = {
+      gmail: "",
+      status: row.state === "device" ? "unknown" : "offline",
+      checkedAt: ""
+    };
+    const previousAccount = getCachedProbeValue(previous, row.serial, "account", fallbackAccount);
+    const needsNetworkRefresh = row.state === "device" && networkRefreshSet.has(row.serial);
+    const needsAccountRefresh = row.state === "device" && accountRefreshSet.has(row.serial);
+    const bundle = (needsNetworkRefresh || needsAccountRefresh)
+      ? queryDeviceProbeBundle(row.serial, true, {
+          includeNetwork: needsNetworkRefresh,
+          includeAccount: needsAccountRefresh
+        })
+      : null;
+    const network = row.state !== "device"
+      ? queryDeviceNetwork(row.serial, false)
+      : (needsNetworkRefresh
+          ? (bundle?.network || fallbackNetwork)
+          : getCachedProbeValue(previous, row.serial, "network", fallbackNetwork));
+    const account = row.state !== "device"
+      ? queryDeviceGoogleAccount(row.serial, false)
+      : (needsAccountRefresh
+          ? selectBestAccountProbe(bundle?.account || fallbackAccount, previousAccount)
+          : previousAccount);
     next[row.serial] = {
       serial: row.serial,
       adbState: row.state,
@@ -1049,7 +1182,7 @@ function refreshDevices() {
       role: metadata.role || "sim-direct",
       parentHotspotSerial: metadata.parentHotspotSerial || "",
       routerId: metadata.routerId || "",
-      routerSlot: Number.isFinite(Number(metadata.routerSlot)) ? Number(metadata.routerSlot) : null,
+      routerSlot: parsePositiveIntegerOrNull(metadata.routerSlot),
       network,
       account,
       publicIp: stored.publicIp || previous[row.serial]?.publicIp || buildMissingDevice(row.serial).publicIp,
@@ -1092,13 +1225,20 @@ function refreshDevices() {
   }
 
   deviceCache = next;
-  if (shouldRefreshNetwork) {
-    lastIpRefreshAt = Date.now();
-  }
-  if (shouldRefreshAccounts) {
-    lastAccountRefreshAt = Date.now();
-  }
   refreshRouters();
+}
+
+function selectBestAccountProbe(nextAccount, previousAccount) {
+  const current = nextAccount || {};
+  const previous = previousAccount || {};
+  if ((current.status === "unavailable" || current.status === "unknown") && previous.gmail) {
+    return {
+      gmail: previous.gmail,
+      status: previous.status || "assigned",
+      checkedAt: current.checkedAt || previous.checkedAt || ""
+    };
+  }
+  return current;
 }
 
 function refreshRouters() {
@@ -1220,23 +1360,25 @@ function probeTcpPort(host, port, timeoutMs) {
 }
 
 function applyDuplicateFlags(devices) {
-  const counts = new Map();
+  const serialsByIp = new Map();
   for (const device of devices) {
     const ip = device.publicIp?.currentIp;
     if (!ip) continue;
-    counts.set(ip, (counts.get(ip) || 0) + 1);
+    const serials = serialsByIp.get(ip) || [];
+    serials.push(device.serial);
+    serialsByIp.set(ip, serials);
   }
 
   return devices.map(device => {
     const ip = device.publicIp?.currentIp || "";
-    const duplicate = ip && (counts.get(ip) || 0) > 1;
+    const serials = ip ? (serialsByIp.get(ip) || []) : [];
+    const duplicateWith = serials.filter(serial => serial !== device.serial);
+    const duplicate = duplicateWith.length > 0;
     return {
       ...device,
       publicIp: {
         ...(device.publicIp || {}),
-        duplicateWith: duplicate
-          ? devices.filter(other => other.serial !== device.serial && other.publicIp?.currentIp === ip).map(other => other.serial)
-          : [],
+        duplicateWith,
         status: duplicate && (device.publicIp?.status === "verified" || device.publicIp?.status === "changed")
           ? "duplicate"
           : (device.publicIp?.status || "unknown")
@@ -1270,7 +1412,8 @@ function queryAdbDevices() {
   const result = spawnSync(adbPath, ["devices", "-l"], {
     cwd: ROOT,
     encoding: "utf8",
-    windowsHide: true
+    windowsHide: true,
+    timeout: 8000
   });
   if (result.error) {
     logMissingToolOnce("adb", result.error.message);
@@ -1287,6 +1430,37 @@ function queryAdbDevices() {
     .filter(Boolean)
     .map(parseAdbLine)
     .filter(Boolean);
+}
+
+function getCachedProbeValue(previous, serial, key, fallback) {
+  return state.devices?.[serial]?.[key] || previous[serial]?.[key] || fallback;
+}
+
+function getProbeAgeMs(probe) {
+  const checkedAt = new Date(probe?.checkedAt || 0).getTime();
+  if (!checkedAt || Number.isNaN(checkedAt)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return Math.max(Date.now() - checkedAt, 0);
+}
+
+function selectProbeRefreshSerials(rows, previous, key, staleAfterMs, limit) {
+  const effectiveLimit = Math.max(Number(limit) || 0, 0);
+  if (!effectiveLimit) {
+    return new Set();
+  }
+
+  const candidates = rows
+    .filter(row => row.state === "device")
+    .map(row => ({
+      serial: row.serial,
+      ageMs: getProbeAgeMs(getCachedProbeValue(previous, row.serial, key, null))
+    }))
+    .filter(entry => entry.ageMs >= staleAfterMs)
+    .sort((a, b) => b.ageMs - a.ageMs)
+    .slice(0, effectiveLimit);
+
+  return new Set(candidates.map(entry => entry.serial));
 }
 
 function logMissingToolOnce(tool, message) {
@@ -1319,110 +1493,153 @@ function parseAdbLine(line) {
   return info;
 }
 
-function queryDeviceNetwork(serial, online) {
-  const checkedAt = new Date().toISOString();
-  if (!online) {
-    return {
-      ipAddress: "",
-      interface: "",
-      source: "",
-      status: "offline",
-      checkedAt
-    };
-  }
-
-  const attempts = [
-    {
-      source: "ip-route",
-      args: ["-s", serial, "shell", "ip", "route"]
-    },
-    {
-      source: "ip-addr",
-      args: ["-s", serial, "shell", "ip", "-f", "inet", "addr", "show"]
-    },
-    {
-      source: "getprop-wlan0",
-      args: ["-s", serial, "shell", "getprop", "dhcp.wlan0.ipaddress"]
-    },
-    {
-      source: "getprop-rmnet",
-      args: ["-s", serial, "shell", "getprop", "dhcp.rmnet_data0.ipaddress"]
-    }
-  ];
-
-  for (const attempt of attempts) {
-    const result = spawnSync(settings.adbPath || "adb", attempt.args, {
-      cwd: ROOT,
-      encoding: "utf8",
-      windowsHide: true,
-      timeout: 8000
-    });
-
-    if (result.error || result.status !== 0) {
-      continue;
-    }
-
-    const parsed = parseNetworkOutput(String(result.stdout || ""), attempt.source);
-    if (parsed.ipAddress) {
-      return {
-        ipAddress: parsed.ipAddress,
-        interface: parsed.interface,
-        source: attempt.source,
-        status: "ok",
-        checkedAt
-      };
-    }
-  }
-
-  return {
-    ipAddress: "",
-    interface: "",
-    source: "",
-    status: "unresolved",
-    checkedAt
-  };
-}
-
-function queryDeviceGoogleAccount(serial, online) {
-  const checkedAt = new Date().toISOString();
-  if (!online) {
-    return {
-      gmail: "",
-      status: "offline",
-      checkedAt
-    };
-  }
-
-  const result = spawnSync(settings.adbPath || "adb", ["-s", serial, "shell", "dumpsys", "account"], {
-    cwd: ROOT,
-    encoding: "utf8",
-    windowsHide: true,
-    timeout: 8000
-  });
-
-  if (result.error || result.status !== 0) {
-    return {
-      gmail: "",
-      status: "unavailable",
-      checkedAt
-    };
-  }
-
-  const output = String(result.stdout || "");
-  const match = output.match(/Account\s+\{name=([^,]+),\s*type=com\.google\}/i);
+function parseGoogleAccountOutput(output) {
+  const normalized = String(output || "");
+  const match = normalized.match(/Account\s+\{name=([^,]+),\s*type=com\.google\}/i);
   if (match) {
     return {
       gmail: match[1].trim(),
-      status: "assigned",
-      checkedAt
+      status: "assigned"
     };
   }
 
   return {
     gmail: "",
-    status: "unassigned",
+    status: normalized.trim() ? "unassigned" : "unavailable"
+  };
+}
+
+function queryDeviceProbeBundle(serial, online, { includeNetwork = true, includeAccount = true } = {}) {
+  const checkedAt = new Date().toISOString();
+  const offlineNetwork = {
+    ipAddress: "",
+    interface: "",
+    source: "",
+    status: "offline",
     checkedAt
   };
+  const offlineAccount = {
+    gmail: "",
+    status: "offline",
+    checkedAt
+  };
+
+  if (!online) {
+    return {
+      network: offlineNetwork,
+      account: offlineAccount
+    };
+  }
+
+  const segments = [];
+  if (includeNetwork) {
+    segments.push(["PF_IP_ROUTE", "ip route 2>/dev/null"]);
+    segments.push(["PF_IP_ADDR", "ip -f inet addr show 2>/dev/null"]);
+    segments.push(["PF_PROP_WLAN0", "getprop dhcp.wlan0.ipaddress 2>/dev/null"]);
+    segments.push(["PF_PROP_RMNET", "getprop dhcp.rmnet_data0.ipaddress 2>/dev/null"]);
+  }
+  if (includeAccount) {
+    segments.push(["PF_ACCOUNT", "dumpsys account 2>/dev/null"]);
+  }
+
+  const shellScript = segments
+    .map(([marker, command]) => `echo __${marker}__; ${command}`)
+    .join("; ");
+
+  const result = spawnSync(settings.adbPath || "adb", ["-s", serial, "shell", "sh", "-c", shellScript], {
+    cwd: ROOT,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 12000
+  });
+
+  if (result.error || result.status !== 0) {
+    return {
+      network: includeNetwork ? {
+        ipAddress: "",
+        interface: "",
+        source: "",
+        status: "unresolved",
+        checkedAt
+      } : offlineNetwork,
+      account: includeAccount ? {
+        gmail: "",
+        status: "unavailable",
+        checkedAt
+      } : offlineAccount
+    };
+  }
+
+  const output = String(result.stdout || "");
+  const markerPattern = /^__(PF_[A-Z0-9_]+)__$/;
+  const grouped = {};
+  let currentMarker = "";
+  for (const line of output.split(/\r?\n/)) {
+    const markerMatch = line.trim().match(markerPattern);
+    if (markerMatch) {
+      currentMarker = markerMatch[1];
+      if (!grouped[currentMarker]) {
+        grouped[currentMarker] = [];
+      }
+      continue;
+    }
+    if (!currentMarker) {
+      continue;
+    }
+    grouped[currentMarker].push(line);
+  }
+
+  let network = offlineNetwork;
+  if (includeNetwork) {
+    const attempts = [
+      ["ip-route", grouped.PF_IP_ROUTE || []],
+      ["ip-addr", grouped.PF_IP_ADDR || []],
+      ["getprop-wlan0", grouped.PF_PROP_WLAN0 || []],
+      ["getprop-rmnet", grouped.PF_PROP_RMNET || []]
+    ];
+
+    network = {
+      ipAddress: "",
+      interface: "",
+      source: "",
+      status: "unresolved",
+      checkedAt
+    };
+
+    for (const [source, lines] of attempts) {
+      const parsed = parseNetworkOutput(lines.join("\n"), source);
+      if (parsed.ipAddress) {
+        network = {
+          ipAddress: parsed.ipAddress,
+          interface: parsed.interface,
+          source,
+          status: "ok",
+          checkedAt
+        };
+        break;
+      }
+    }
+  }
+
+  let account = offlineAccount;
+  if (includeAccount) {
+    const parsedAccount = parseGoogleAccountOutput((grouped.PF_ACCOUNT || []).join("\n"));
+    account = {
+      gmail: parsedAccount.gmail,
+      status: parsedAccount.status,
+      checkedAt
+    };
+  }
+
+  return { network, account };
+}
+
+function queryDeviceNetwork(serial, online) {
+  return queryDeviceProbeBundle(serial, online, { includeNetwork: true, includeAccount: false }).network;
+}
+
+function queryDeviceGoogleAccount(serial, online) {
+  return queryDeviceProbeBundle(serial, online, { includeNetwork: false, includeAccount: true }).account;
 }
 
 function parseNetworkOutput(output, source) {
@@ -1431,35 +1648,69 @@ function parseNetworkOutput(output, source) {
     return { ipAddress: "", interface: "" };
   }
 
+  const isUsableNetworkCandidate = (ipAddress, interfaceName) => {
+    const ip = String(ipAddress || "").trim();
+    const iface = String(interfaceName || "").trim().replace(/:+$/, "").toLowerCase();
+    if (!ip || !iface) {
+      return false;
+    }
+    if (iface === "lo" || iface === "loopback" || iface === "dummy0") {
+      return false;
+    }
+    if (ip === "127.0.0.1" || ip.startsWith("127.")) {
+      return false;
+    }
+    if (ip === "0.0.0.0" || ip.startsWith("169.254.")) {
+      return false;
+    }
+    return true;
+  };
+
   if (source === "ip-route") {
     const lines = normalized.split(/\r?\n/);
     for (const line of lines) {
       const match = line.match(/\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3}).*?\bdev\s+([A-Za-z0-9_.:-]+)/);
       if (match) {
-        return { ipAddress: match[1], interface: match[2] };
+        if (isUsableNetworkCandidate(match[1], match[2])) {
+          return { ipAddress: match[1], interface: match[2] };
+        }
       }
       const fallback = line.match(/\bdev\s+([A-Za-z0-9_.:-]+).*?\bsrc\s+(\d{1,3}(?:\.\d{1,3}){3})/);
       if (fallback) {
-        return { ipAddress: fallback[2], interface: fallback[1] };
+        if (isUsableNetworkCandidate(fallback[2], fallback[1])) {
+          return { ipAddress: fallback[2], interface: fallback[1] };
+        }
       }
     }
   }
 
   if (source === "ip-addr") {
-    const match = normalized.match(/inet\s+(\d{1,3}(?:\.\d{1,3}){3})\/\d+\s+.*?\b([A-Za-z0-9_.:-]+)$/m);
-    if (match) {
-      return { ipAddress: match[1], interface: match[2] };
+    const blocks = normalized.split(/\r?\n(?=\d+:\s)/);
+    for (const block of blocks) {
+      const headerMatch = block.match(/^\d+:\s+([A-Za-z0-9_.:-]+)/m);
+      const ipMatch = block.match(/\binet\s+(\d{1,3}(?:\.\d{1,3}){3})\/\d+/m);
+      const interfaceName = String(headerMatch?.[1] || "").replace(/:+$/, "");
+      const ipAddress = ipMatch?.[1] || "";
+      if (isUsableNetworkCandidate(ipAddress, interfaceName)) {
+        return { ipAddress, interface: interfaceName };
+      }
     }
     const alt = normalized.match(/\d+:\s+([A-Za-z0-9_.:-]+).*?inet\s+(\d{1,3}(?:\.\d{1,3}){3})\/\d+/s);
     if (alt) {
-      return { ipAddress: alt[2], interface: alt[1] };
+      const interfaceName = String(alt[1] || "").replace(/:+$/, "");
+      if (isUsableNetworkCandidate(alt[2], interfaceName)) {
+        return { ipAddress: alt[2], interface: interfaceName };
+      }
     }
   }
 
   if (source.startsWith("getprop")) {
     const match = normalized.match(/(\d{1,3}(?:\.\d{1,3}){3})/);
     if (match) {
-      return { ipAddress: match[1], interface: source.includes("wlan0") ? "wlan0" : "rmnet_data0" };
+      const interfaceName = source.includes("wlan0") ? "wlan0" : "rmnet_data0";
+      if (isUsableNetworkCandidate(match[1], interfaceName)) {
+        return { ipAddress: match[1], interface: interfaceName };
+      }
     }
   }
 
@@ -1637,6 +1888,19 @@ function parsePublicIp(output) {
 function processPrepQueue() {
   if (preparingSerial || !(state.queue || []).length) return;
   const serial = state.queue[0];
+  const queuedDevice = deviceCache[serial] || buildMissingDevice(serial);
+  if (!queuedDevice.online) {
+    state.queue = state.queue.slice(1);
+    updateDeviceState(serial, {
+      prepState: "failed",
+      prepMessage: "Prep skipped because the device is offline in ADB.",
+      prepStartedAt: "",
+      prepFinishedAt: new Date().toISOString()
+    });
+    logActivity("queue", "Prep skipped because the device is offline in ADB", serial);
+    processPrepQueue();
+    return;
+  }
   const prepStartedAt = new Date().toISOString();
   preparingSerial = serial;
   state.queue = state.queue.slice(1);
@@ -1653,6 +1917,17 @@ function processPrepQueue() {
     ["-Serial", serial, "-SettingsPath", SETTINGS_PATH, "-ActivityLogPath", ACTIVITY_LOG_PATH],
     { detached: false }
   );
+
+  child.on("error", error => {
+    updateDeviceState(serial, {
+      prepState: "failed",
+      prepMessage: `Prep failed to start: ${error.message}`,
+      prepFinishedAt: new Date().toISOString()
+    });
+    logActivity("queue", `Prep failed to start: ${error.message}`, serial);
+    preparingSerial = null;
+    processPrepQueue();
+  });
 
   child.on("exit", code => {
     const success = code === 0;
@@ -1773,7 +2048,7 @@ function launchViewerForDevice(serial, username, sourceAction) {
 function refreshRoutingAudit() {
   if (Date.now() - lastRoutingAuditAt < 25000) return;
   lastRoutingAuditAt = Date.now();
-  runPowerShellScript("audit-phonefarm-routing.ps1", [], { detached: true });
+  runPowerShellScript("audit-phonefarm-routing.ps1", [], { detached: true, logLifecycle: false });
 }
 
 function safeRefreshRoutingAudit() {
@@ -1785,19 +2060,44 @@ function safeRefreshRoutingAudit() {
 }
 
 function loadRoutingAudit() {
-  return loadJson(ROUTING_AUDIT_PATH, {
+  const fallback = {
     checkedAt: "",
     overallOk: false,
     summary: "Routing audit has not completed yet.",
     checks: []
-  });
+  };
+
+  try {
+    const stats = fs.statSync(ROUTING_AUDIT_PATH);
+    const mtimeMs = Number(stats.mtimeMs) || 0;
+    if (routingAuditCache && routingAuditCacheMtimeMs === mtimeMs) {
+      return routingAuditCache;
+    }
+
+    routingAuditCache = loadJson(ROUTING_AUDIT_PATH, fallback);
+    routingAuditCacheMtimeMs = mtimeMs;
+    return routingAuditCache;
+  } catch (error) {
+    routingAuditCache = fallback;
+    routingAuditCacheMtimeMs = 0;
+    return fallback;
+  }
 }
 
 function buildPrepTelemetry(devices) {
-  const active = devices.find(device => device.serial === preparingSerial) || null;
-  const completed = devices
-    .filter(device => device.prepFinishedAt)
-    .sort((a, b) => new Date(b.prepFinishedAt).getTime() - new Date(a.prepFinishedAt).getTime())[0] || null;
+  let active = null;
+  let completed = null;
+  let completedAt = 0;
+  for (const device of devices || []) {
+    if (!active && device.serial === preparingSerial) {
+      active = device;
+    }
+    const finishedAt = new Date(device.prepFinishedAt || 0).getTime();
+    if (finishedAt > completedAt) {
+      completed = device;
+      completedAt = finishedAt;
+    }
+  }
   return {
     active: active ? {
       serial: active.serial,
@@ -1816,16 +2116,15 @@ function buildPrepTelemetry(devices) {
   };
 }
 
-function enrichDeviceForStatus(device, routingAudit) {
+function enrichDeviceForStatus(device, routingAudit, routingGuard = buildRoutingGuard(routingAudit), activeSession = getActiveSession()) {
   const normalizedPublicIp = normalizePublicIpState(device.serial, device.publicIp);
   const router = device.routerId ? getRouterConfig(device.routerId) : null;
-  const activeSession = getActiveSession();
   return {
     ...device,
     publicIp: normalizedPublicIp,
     prepElapsedMs: getActivePrepElapsedMs(device),
     queueWaitMs: getQueueWaitMs(device),
-    routingRisk: getDeviceRoutingRisk({ ...device, publicIp: normalizedPublicIp }, routingAudit),
+    routingRisk: getDeviceRoutingRisk({ ...device, publicIp: normalizedPublicIp }, routingAudit, routingGuard),
     routerLabel: router?.label || "",
     routerSsid: router?.ssid || "",
     activationLock: buildActivationLock(device, activeSession)
@@ -1940,8 +2239,7 @@ function normalizePublicIpState(serial, publicIp) {
   };
 }
 
-function getDeviceRoutingRisk(device, routingAudit) {
-  const routingGuard = buildRoutingGuard(routingAudit);
+function getDeviceRoutingRisk(device, routingAudit, routingGuard = buildRoutingGuard(routingAudit)) {
   const interfaceName = String(device.network?.interface || "").toLowerCase();
   if (interfaceName === "lo" || interfaceName === "loopback") {
     return {
@@ -2014,7 +2312,10 @@ function parseViewerLaunchPayload(stdout) {
 function runPowerShellScript(scriptName, scriptArgs = [], options) {
   const scriptPath = path.join(SCRIPTS_DIR, scriptName);
   const argsDescription = scriptArgs.length ? ` ${scriptArgs.join(" ")}` : "";
-  logActivity("system", `Running PowerShell script ${scriptName}${argsDescription}`);
+  const shouldLogLifecycle = options?.logLifecycle !== false;
+  if (shouldLogLifecycle) {
+    logActivity("system", `Running PowerShell script ${scriptName}${argsDescription}`);
+  }
   const psArgs = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...scriptArgs];
   const child = spawn("powershell.exe", psArgs, {
     cwd: ROOT,
@@ -2024,11 +2325,13 @@ function runPowerShellScript(scriptName, scriptArgs = [], options) {
   });
 
   child.on("error", error => {
-    logActivity("system", `PowerShell ${scriptName} failed to start: ${error.message}`);
+    if (shouldLogLifecycle) {
+      logActivity("system", `PowerShell ${scriptName} failed to start: ${error.message}`);
+    }
   });
 
   child.on("exit", code => {
-    if (code !== 0) {
+    if (shouldLogLifecycle && code !== 0) {
       logActivity("system", `PowerShell ${scriptName} exited with code ${code}`);
     }
   });
@@ -2036,7 +2339,7 @@ function runPowerShellScript(scriptName, scriptArgs = [], options) {
   if (child.stderr) {
     child.stderr.on("data", chunk => {
       const message = chunk.toString().trim();
-      if (message) {
+      if (shouldLogLifecycle && message) {
         logActivity("system", `PowerShell ${scriptName} stderr: ${message}`);
       }
     });

@@ -8,7 +8,7 @@
     "start": "node server.js",
     "start:desktop": "electron .",
     "test:smoke": "powershell -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\test-phonefarm-smoke.ps1",
-    "dist:desktop": "electron-builder --win portable nsis"
+    "dist:desktop": "electron-builder --win portable nsis --x64"
   },
   "build": {
     "appId": "com.opalfarm.desktop",
@@ -31,8 +31,18 @@
     "win": {
       "icon": "assets/phonefarm.ico",
       "target": [
-        "portable",
-        "nsis"
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {

@@ -1,8 +1,8 @@
 {
   "host": "127.0.0.1",
   "port": 7781,
-  "adbPath": "C:\\Users\\juanp\\AppData\\Local\\Android\\Sdk\\platform-tools\\adb.exe",
-  "scrcpyPath": "C:\\Users\\juanp\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Genymobile.scrcpy_Microsoft.Winget.Source_8wekyb3d8bbwe\\scrcpy-win64-v3.3.4\\scrcpy.exe",
+  "adbPath": "C:\\Users\\everg\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Google.PlatformTools_Microsoft.Winget.Source_8wekyb3d8bbwe\\platform-tools\\adb.exe",
+  "scrcpyPath": "C:\\Users\\everg\\AppData\\Local\\Microsoft\\WinGet\\Packages\\Genymobile.scrcpy_Microsoft.Winget.Source_8wekyb3d8bbwe\\scrcpy-win64-v3.3.4\\scrcpy.exe",
   "pollIntervalMs": 5000,
   "ipRefreshIntervalMs": 15000,
   "routerRefreshIntervalMs": 20000,
@@ -18,7 +18,7 @@
     "commandTimeoutSeconds": 25
   },
   "uplinkControl": {
-    "powerCycleScriptPath": "C:\\PhoneFarm-Opal\\scripts\\cycle-mobile-uplink.ps1",
+    "powerCycleScriptPath": "C:\\Users\\everg\\opalfarm-release\\scripts\\cycle-mobile-uplink.ps1",
     "defaultPowerCycleSeconds": 12
   }
 }

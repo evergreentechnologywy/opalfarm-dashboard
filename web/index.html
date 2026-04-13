@@ -67,6 +67,7 @@
             <select id="roleFilter">
               <option value="all">All roles</option>
               <option value="sim-direct">SIM Direct</option>
+              <option value="opal-client">Opal Client</option>
               <option value="hotspot-client">Hotspot Client</option>
             </select>
           </label>
@@ -291,6 +292,7 @@
         </div>
 
         <div class="device-actions">
+          <button class="button button-secondary action-edit" type="button">Edit Device</button>
           <button class="button button-secondary action-open" type="button">Open Control</button>
           <button class="button button-primary action-prep" type="button">Prep Device</button>
           <button class="button button-secondary action-connect-router" type="button">Connect Router</button>
@@ -303,6 +305,53 @@
         </div>
       </article>
     </template>
+
+    <div id="deviceEditorModal" class="modal-shell" hidden>
+      <div class="modal-backdrop" data-close-modal="device-editor"></div>
+      <section class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="deviceEditorTitle">
+        <div class="panel-header">
+          <div>
+            <h2 id="deviceEditorTitle">Edit Device</h2>
+            <p id="deviceEditorSubtitle" class="panel-copy panel-copy-tight">Update router assignment and role metadata.</p>
+          </div>
+          <button id="deviceEditorCloseButton" class="button button-ghost" type="button">Close</button>
+        </div>
+        <form id="deviceEditorForm" class="editor-form">
+          <label class="select-field">
+            <span class="field-label">Nickname</span>
+            <input id="editorNickname" type="text" maxlength="80" />
+          </label>
+          <label class="select-field">
+            <span class="field-label">Phone Number</span>
+            <input id="editorPhoneNumber" type="number" min="1" step="1" />
+          </label>
+          <label class="select-field">
+            <span class="field-label">Role</span>
+            <select id="editorRole">
+              <option value="sim-direct">SIM Direct</option>
+              <option value="opal-client">Opal Client</option>
+              <option value="hotspot-client">Hotspot Client</option>
+            </select>
+          </label>
+          <label class="select-field">
+            <span class="field-label">Router</span>
+            <select id="editorRouterId"></select>
+          </label>
+          <label class="select-field">
+            <span class="field-label">Router Slot</span>
+            <input id="editorRouterSlot" type="number" min="1" step="1" />
+          </label>
+          <label class="select-field">
+            <span class="field-label">Parent Hotspot Serial</span>
+            <input id="editorParentHotspotSerial" type="text" maxlength="80" />
+          </label>
+          <div class="editor-actions">
+            <button id="deviceEditorSaveButton" class="button button-primary" type="submit">Save Device</button>
+            <button id="deviceEditorCancelButton" class="button button-secondary" type="button">Cancel</button>
+          </div>
+        </form>
+      </section>
+    </div>
 
     <script src="app.js?v=20260406a"></script>
   </body>

@@ -1,3 +1,196 @@
 {
-  "devices": {}
+  "devices": {
+    "23A2C618": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23AAC64B": {
+      "entries": [
+        {
+          "timestamp": "2026-04-10T18:34:02.108Z",
+          "ip": "2600:100a:b053:9149:ed9d:a8b9:9f4f:32d5",
+          "reason": "post-prep",
+          "source": "phonefarm-ip-helper:ipify-json",
+          "status": "verified",
+          "changedSinceLastPrep": false,
+          "duplicateWith": [],
+          "reusedRecently": false
+        }
+      ],
+      "lastSuccessfulIp": "2600:100a:b053:9149:ed9d:a8b9:9f4f:32d5",
+      "lastSuccessfulPrepIp": "2600:100a:b053:9149:ed9d:a8b9:9f4f:32d5",
+      "lastVerifiedAt": "2026-04-10T18:34:02.108Z",
+      "lastSuccessfulPrepAt": "2026-04-10T18:34:02.108Z"
+    },
+    "23AAC652": {
+      "entries": [
+        {
+          "timestamp": "2026-04-10T18:51:11.119Z",
+          "ip": "2600:100a:b03e:8b6d:a012:b7fc:b7e7:4b18",
+          "reason": "manual",
+          "source": "phonefarm-ip-helper:ipify-json",
+          "status": "verified",
+          "changedSinceLastPrep": false,
+          "duplicateWith": [],
+          "reusedRecently": false
+        },
+        {
+          "timestamp": "2026-04-10T18:48:59.953Z",
+          "ip": "2600:100a:b03e:8b6d:a012:b7fc:b7e7:4b18",
+          "reason": "pre-session",
+          "source": "phonefarm-ip-helper:ipify-json",
+          "status": "verified",
+          "changedSinceLastPrep": false,
+          "duplicateWith": [],
+          "reusedRecently": false
+        },
+        {
+          "timestamp": "2026-04-10T18:48:27.030Z",
+          "ip": "2600:100a:b03e:8b6d:a012:b7fc:b7e7:4b18",
+          "reason": "pre-session",
+          "source": "phonefarm-ip-helper:ipify-json",
+          "status": "verified",
+          "changedSinceLastPrep": false,
+          "duplicateWith": [],
+          "reusedRecently": false
+        },
+        {
+          "timestamp": "2026-04-10T18:36:31.008Z",
+          "ip": "2600:100a:b03e:8b6d:a012:b7fc:b7e7:4b18",
+          "reason": "post-prep",
+          "source": "phonefarm-ip-helper:ipify-json",
+          "status": "verified",
+          "changedSinceLastPrep": false,
+          "duplicateWith": [],
+          "reusedRecently": false
+        }
+      ],
+      "lastSuccessfulIp": "2600:100a:b03e:8b6d:a012:b7fc:b7e7:4b18",
+      "lastSuccessfulPrepIp": "2600:100a:b03e:8b6d:a012:b7fc:b7e7:4b18",
+      "lastVerifiedAt": "2026-04-10T18:51:11.119Z",
+      "lastSuccessfulPrepAt": "2026-04-10T18:36:31.008Z"
+    },
+    "23B3C605": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23B6C60B": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23BFC639": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23BFC671": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23BFC680": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23BFC6BD": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23C7C69C": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "23DFC6CA": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "6F6296C5": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "6F9B97EE": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "6FA09768": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "700197EC": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "A69CAA34": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "A69CAA5F": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "A6A5AAB9": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "A6B2AA09": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    },
+    "A6D6AA6C": {
+      "entries": [],
+      "lastSuccessfulIp": "",
+      "lastSuccessfulPrepIp": "",
+      "lastVerifiedAt": "",
+      "lastSuccessfulPrepAt": ""
+    }
+  }
 }

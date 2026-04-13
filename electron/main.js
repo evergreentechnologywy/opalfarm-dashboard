@@ -193,6 +193,31 @@ async function postJson(url, body) {
   return payload;
 }
 
+async function requestJson(context, request) {
+  const method = String(request?.method || "GET").toUpperCase();
+  const pathname = String(request?.path || "");
+  if (!pathname.startsWith("/")) {
+    throw new Error("Desktop API requests must use an absolute /api path");
+  }
+
+  const options = {
+    method,
+    headers: { "Content-Type": "application/json" }
+  };
+
+  if (method !== "GET" && request?.body !== undefined) {
+    options.body = JSON.stringify(request.body);
+  }
+
+  const response = await fetch(`${context.baseUrl}${pathname}`, options);
+  const payload = await response.json().catch(() => ({}));
+  return {
+    ok: response.ok,
+    status: response.status,
+    payload
+  };
+}
+
 async function ensureServer(context) {
   if (await checkServer(context.baseUrl)) {
     writeDesktopLog(context.root, `Reused running server at ${context.baseUrl}`);
@@ -221,8 +246,7 @@ async function ensureServer(context) {
   return context.baseUrl;
 }
 
-function createWindow(baseUrl) {
-  const context = getWorkspaceContext();
+function createWindow(context) {
   const iconPath = path.join(context.root, "assets", "phonefarm.ico");
   mainWindow = new BrowserWindow({
     width: 1600,
@@ -255,15 +279,13 @@ function createWindow(baseUrl) {
   mainWindow.webContents.on("did-finish-load", async () => {
     try {
       const bridgeReady = await mainWindow.webContents.executeJavaScript("Boolean(window.phoneFarmDesktop && window.phoneFarmDesktop.isDesktopApp)", true);
-      const context = getWorkspaceContext();
-      writeDesktopLog(context.root, `Renderer loaded ${baseUrl}; desktop bridge ready=${bridgeReady}`);
+      writeDesktopLog(context.root, `Renderer loaded from local files; API bridge ready=${bridgeReady}; backend=${context.baseUrl}`);
     } catch (error) {
-      const context = getWorkspaceContext();
       writeDesktopLog(context.root, `Renderer bridge check failed: ${error.message}`);
     }
   });
 
-  mainWindow.loadURL(baseUrl);
+  mainWindow.loadFile(path.join(context.root, "web", "index.html"));
 }
 
 async function callRendererBridge(methodName, arg) {
@@ -385,11 +407,16 @@ ipcMain.handle("phonefarm:sync-viewer-state", async (_event, payload) => {
   return postJson(`${context.baseUrl}/api/devices/${encodeURIComponent(serial)}/viewer-state`, payload);
 });
 
+ipcMain.handle("phonefarm:request-json", async (_event, request) => {
+  const context = getWorkspaceContext();
+  return requestJson(context, request);
+});
+
 async function bootstrap() {
   try {
     const context = getWorkspaceContext();
-    const baseUrl = await ensureServer(context);
-    createWindow(baseUrl);
+    await ensureServer(context);
+    createWindow(context);
     maybeRunDesktopTest(context);
   } catch (error) {
     dialog.showErrorBox("OpalFarm Startup Failed", error.message);
@@ -423,7 +450,8 @@ app.on("activate", async () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     try {
       const context = getWorkspaceContext();
-      createWindow(context.baseUrl);
+      await ensureServer(context);
+      createWindow(context);
     } catch (error) {
       dialog.showErrorBox("OpalFarm Activate Failed", error.message);
     }
